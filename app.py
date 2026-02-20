@@ -270,8 +270,8 @@ if "frames" not in st.session_state:
 
 col_load, col_info = st.columns([1, 3])
 with col_load:
-    if st.button("🔄 프레임 불러오기", use_container_width=True):
-        with st.spinner("Figma에서 프레임 목록을 가져오는 중..."):
+    if st.button("🔄 피그마 읽어오기", use_container_width=True):
+        with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
             figma = FigmaClient()
             all_frames = figma.get_file_frames(figma_file_key)
             ig_frames = [

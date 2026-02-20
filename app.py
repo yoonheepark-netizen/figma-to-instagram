@@ -62,7 +62,7 @@ def get_slack_webhook():
     return os.getenv("SLACK_WEBHOOK_URL", "")
 
 
-def send_slack_notification(results, account_name):
+def send_slack_notification(results):
     """발행 결과를 Slack으로 알립니다."""
     webhook_url = get_slack_webhook()
     if not webhook_url:
@@ -77,7 +77,7 @@ def send_slack_notification(results, account_name):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*계정:* {account_name}\n*시간:* {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "text": f"*시간:* {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             },
         },
         {"type": "divider"},
@@ -85,7 +85,7 @@ def send_slack_notification(results, account_name):
 
     for r in results:
         status_emoji = "✅" if r["success"] else "❌"
-        text = f"{status_emoji} *{r['group']}* ({r['count']}장)"
+        text = f"{status_emoji} *{r['group']}* ({r['count']}장) → {r.get('account_name', '')}"
         if r["success"]:
             if r.get("media_id"):
                 text += f"\nMedia ID: `{r['media_id']}`"
@@ -127,7 +127,7 @@ def group_frames_by_date(frames):
 
 def publish_one_group(group_name, node_ids, caption, scheduled_time, account, status_container):
     """하나의 그룹을 Instagram 캐러셀로 발행합니다. 결과 dict를 반환합니다."""
-    result_info = {"group": group_name, "count": len(node_ids), "caption": caption, "success": False}
+    result_info = {"group": group_name, "count": len(node_ids), "caption": caption, "account_name": account["name"], "success": False}
 
     try:
         status_container.write(f"📐 [{group_name}] Figma에서 이미지 추출 중...")
@@ -339,8 +339,16 @@ if st.session_state.get("all_selected"):
     # 시리즈별 설정 저장
     group_settings = {}  # {grp: {"caption": ..., "mode": ..., "scheduled_time": ...}}
 
+    account_names = [a["name"] for a in accounts]
+
     for grp in all_selected:
         with st.expander(f"📁 {grp} — {len(all_selected[grp])}장", expanded=True):
+            grp_account = st.selectbox(
+                "계정",
+                account_names,
+                key=f"account_{grp}",
+            )
+
             caption = st.text_area(
                 "캡션",
                 placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
@@ -378,6 +386,7 @@ if st.session_state.get("all_selected"):
                 "caption": caption,
                 "mode": mode,
                 "scheduled_time": scheduled_time,
+                "account": next(a for a in accounts if a["name"] == grp_account),
             }
 
     # ── Step 3: 발행 ──────────────────────────────────────
@@ -391,6 +400,7 @@ if st.session_state.get("all_selected"):
         mode_label = "즉시" if settings["mode"] == "즉시 발행" else f"예약 ({settings['scheduled_time'].strftime('%m/%d %H:%M')})"
         summary_data.append({
             "시리즈": grp,
+            "계정": settings["account"]["name"],
             "이미지": f"{len(all_selected[grp])}장",
             "발행": mode_label,
             "캡션": settings["caption"][:30] + "..." if len(settings["caption"]) > 30 else settings["caption"],
@@ -427,7 +437,7 @@ if st.session_state.get("all_selected"):
                     node_ids=node_ids,
                     caption=settings["caption"],
                     scheduled_time=settings["scheduled_time"],
-                    account=selected_account,
+                    account=settings["account"],
                     status_container=status,
                 )
                 results.append(result_info)
@@ -453,6 +463,6 @@ if st.session_state.get("all_selected"):
                 st.warning(f"완료: 성공 {success_count}개 / 실패 {fail_count}개")
 
             # Slack 알림
-            send_slack_notification(results, selected_name)
+            send_slack_notification(results)
             if get_slack_webhook():
                 st.caption("🔔 Slack 알림 전송 완료")

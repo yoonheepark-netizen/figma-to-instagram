@@ -328,65 +328,74 @@ if st.session_state.frame_groups:
 
         st.session_state.all_selected = all_selected
 
-# ── 메인: Step 2 - 캡션 & 발행 설정 ──────────────────────
+# ── 메인: Step 2 - 시리즈별 발행 설정 ─────────────────────
 
 if st.session_state.get("all_selected"):
     all_selected = st.session_state.all_selected
 
     st.divider()
-    st.header("Step 2. 캡션 & 발행 설정")
+    st.header("Step 2. 시리즈별 발행 설정")
 
-    # 발행 모드
-    publish_mode = st.radio(
-        "발행 모드",
-        ["즉시 발행", "예약 발행"],
-        horizontal=True,
-    )
+    # 시리즈별 설정 저장
+    group_settings = {}  # {grp: {"caption": ..., "mode": ..., "scheduled_time": ...}}
 
-    scheduled_time = None
-    if publish_mode == "예약 발행":
-        col_date, col_time = st.columns(2)
-        with col_date:
-            pub_date = st.date_input(
-                "발행 날짜",
-                value=datetime.now() + timedelta(days=1),
-            )
-        with col_time:
-            pub_time = st.time_input("발행 시간", value=datetime.now().replace(hour=10, minute=0))
-        kst = timezone(timedelta(hours=9))
-        scheduled_time = datetime.combine(pub_date, pub_time).replace(tzinfo=kst)
-        st.caption(f"예약 시간: {scheduled_time.isoformat()}")
-
-    st.divider()
-
-    # 그룹별 캡션 입력
-    captions = {}
-    use_same_caption = st.checkbox("모든 시리즈에 같은 캡션 사용", value=len(all_selected) == 1)
-
-    if use_same_caption:
-        shared_caption = st.text_area(
-            "캡션",
-            placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
-            height=100,
-            key="shared_caption",
-        )
-        for grp in all_selected:
-            captions[grp] = shared_caption
-    else:
-        for grp in all_selected:
-            captions[grp] = st.text_area(
-                f"📁 {grp} 캡션",
-                placeholder=f"{grp} 시리즈 캡션",
+    for grp in all_selected:
+        with st.expander(f"📁 {grp} — {len(all_selected[grp])}장", expanded=True):
+            caption = st.text_area(
+                "캡션",
+                placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
                 height=80,
                 key=f"caption_{grp}",
             )
+
+            mode = st.radio(
+                "발행 모드",
+                ["즉시 발행", "예약 발행"],
+                horizontal=True,
+                key=f"mode_{grp}",
+            )
+
+            scheduled_time = None
+            if mode == "예약 발행":
+                col_date, col_time = st.columns(2)
+                with col_date:
+                    pub_date = st.date_input(
+                        "발행 날짜",
+                        value=datetime.now() + timedelta(days=1),
+                        key=f"date_{grp}",
+                    )
+                with col_time:
+                    pub_time = st.time_input(
+                        "발행 시간",
+                        value=datetime.now().replace(hour=10, minute=0),
+                        key=f"time_{grp}",
+                    )
+                kst = timezone(timedelta(hours=9))
+                scheduled_time = datetime.combine(pub_date, pub_time).replace(tzinfo=kst)
+                st.caption(f"예약 시간: {scheduled_time.isoformat()}")
+
+            group_settings[grp] = {
+                "caption": caption,
+                "mode": mode,
+                "scheduled_time": scheduled_time,
+            }
 
     # ── Step 3: 발행 ──────────────────────────────────────
 
     st.divider()
     st.header("Step 3. 발행")
 
-    st.markdown(f"**{len(all_selected)}개 시리즈**를 **{selected_name}** 계정으로 발행합니다.")
+    # 요약 테이블
+    summary_data = []
+    for grp, settings in group_settings.items():
+        mode_label = "즉시" if settings["mode"] == "즉시 발행" else f"예약 ({settings['scheduled_time'].strftime('%m/%d %H:%M')})"
+        summary_data.append({
+            "시리즈": grp,
+            "이미지": f"{len(all_selected[grp])}장",
+            "발행": mode_label,
+            "캡션": settings["caption"][:30] + "..." if len(settings["caption"]) > 30 else settings["caption"],
+        })
+    st.table(summary_data)
 
     col_confirm, col_publish = st.columns([1, 1])
     with col_confirm:
@@ -401,7 +410,7 @@ if st.session_state.get("all_selected"):
 
     if publish_clicked and confirmed:
         # 캡션 검증
-        empty_captions = [g for g, c in captions.items() if not c.strip()]
+        empty_captions = [g for g, s in group_settings.items() if not s["caption"].strip()]
         if empty_captions:
             st.error(f"캡션을 입력해주세요: {', '.join(empty_captions)}")
         else:
@@ -410,13 +419,14 @@ if st.session_state.get("all_selected"):
             results = []
 
             for idx, (grp, node_ids) in enumerate(all_selected.items()):
+                settings = group_settings[grp]
                 status = st.status(f"[{idx + 1}/{total}] {grp} 발행 중...", expanded=True)
 
                 result_info = publish_one_group(
                     group_name=grp,
                     node_ids=node_ids,
-                    caption=captions[grp],
-                    scheduled_time=scheduled_time,
+                    caption=settings["caption"],
+                    scheduled_time=settings["scheduled_time"],
                     account=selected_account,
                     status_container=status,
                 )

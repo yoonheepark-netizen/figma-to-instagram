@@ -4,11 +4,10 @@ import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import requests as req
 import streamlit as st
 
 # ── Streamlit Cloud secrets → 환경 변수 브릿지 ────────────
-# st.secrets (Cloud) 에 [api] 섹션이 있으면 환경 변수로 주입하여
-# config.py 가 동일하게 동작하도록 합니다.
 try:
     if "api" in st.secrets:
         for key, value in st.secrets["api"].items():
@@ -28,18 +27,15 @@ from image_host import ImageHost
 from instagram_client import InstagramClient
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
-IS_CLOUD = "api" in st.secrets if hasattr(st, "secrets") else False
 
 
 # ── 계정 관리 ──────────────────────────────────────────────
 
 
 def load_accounts():
-    # 1) 로컬 accounts.json
     if os.path.exists(ACCOUNTS_FILE):
         with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
             return json.load(f).get("accounts", [])
-    # 2) Streamlit Cloud secrets [[accounts]]
     try:
         if "accounts" in st.secrets:
             return [dict(a) for a in st.secrets["accounts"]]
@@ -53,13 +49,65 @@ def save_accounts(accounts):
         json.dump({"accounts": accounts}, f, ensure_ascii=False, indent=2)
 
 
+# ── Slack 알림 ─────────────────────────────────────────────
+
+
+def get_slack_webhook():
+    """secrets 또는 환경변수에서 Slack Webhook URL을 가져옵니다."""
+    try:
+        if "api" in st.secrets and "SLACK_WEBHOOK_URL" in st.secrets["api"]:
+            return st.secrets["api"]["SLACK_WEBHOOK_URL"]
+    except Exception:
+        pass
+    return os.getenv("SLACK_WEBHOOK_URL", "")
+
+
+def send_slack_notification(results, account_name):
+    """발행 결과를 Slack으로 알립니다."""
+    webhook_url = get_slack_webhook()
+    if not webhook_url:
+        return
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "📸 Instagram 발행 완료"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*계정:* {account_name}\n*시간:* {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            },
+        },
+        {"type": "divider"},
+    ]
+
+    for r in results:
+        status_emoji = "✅" if r["success"] else "❌"
+        text = f"{status_emoji} *{r['group']}* ({r['count']}장)"
+        if r["success"]:
+            if r.get("media_id"):
+                text += f"\nMedia ID: `{r['media_id']}`"
+            elif r.get("container_id"):
+                text += f"\n예약 발행 | Container: `{r['container_id']}`"
+            if r.get("caption"):
+                caption_preview = r["caption"][:80] + ("..." if len(r["caption"]) > 80 else "")
+                text += f"\n> {caption_preview}"
+        else:
+            text += f"\n에러: {r.get('error', '알 수 없음')}"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
+
+    try:
+        req.post(webhook_url, json={"blocks": blocks}, timeout=5)
+    except Exception:
+        pass
+
+
 # ── 프레임 그룹핑 ─────────────────────────────────────────
 
 
 def group_frames_by_date(frames):
-    """프레임 이름에서 날짜를 추출하여 그룹핑합니다.
-    예: '250213-1' → 그룹 '250213'
-    """
     groups = defaultdict(list)
     ungrouped = []
     for f in frames:
@@ -71,11 +119,51 @@ def group_frames_by_date(frames):
         else:
             ungrouped.append(f)
 
-    # 각 그룹 내에서 순서 정렬
     for key in groups:
         groups[key].sort(key=lambda x: x["_order"])
 
     return dict(sorted(groups.items(), reverse=True)), ungrouped
+
+
+def publish_one_group(group_name, node_ids, caption, scheduled_time, account, status_container):
+    """하나의 그룹을 Instagram 캐러셀로 발행합니다. 결과 dict를 반환합니다."""
+    result_info = {"group": group_name, "count": len(node_ids), "caption": caption, "success": False}
+
+    try:
+        status_container.write(f"📐 [{group_name}] Figma에서 이미지 추출 중...")
+        figma = FigmaClient()
+        image_urls = figma.export_images(node_ids, fmt="png", scale=2)
+
+        status_container.write(f"⬇️ [{group_name}] 이미지 다운로드 중...")
+        figma.download_images(image_urls)
+        ordered_files = []
+        for nid in node_ids:
+            safe = nid.replace(":", "-")
+            path = os.path.join("downloads", f"frame_{safe}.png")
+            if os.path.exists(path):
+                ordered_files.append(path)
+
+        status_container.write(f"☁️ [{group_name}] 이미지 업로드 중...")
+        host = ImageHost()
+        public_urls = host.upload_batch(ordered_files, expiration=86400)
+
+        status_container.write(f"📸 [{group_name}] Instagram에 발행 중...")
+        ig = InstagramClient()
+        ig.user_id = account["instagram_user_id"]
+        ig.access_token = account["access_token"]
+
+        result = ig.publish_carousel(public_urls, caption, scheduled_time)
+
+        result_info["success"] = True
+        if result["status"] == "published":
+            result_info["media_id"] = result["media_id"]
+        else:
+            result_info["container_id"] = result["container_id"]
+
+    except Exception as e:
+        result_info["error"] = str(e)
+
+    return result_info
 
 
 # ── 페이지 설정 ───────────────────────────────────────────
@@ -102,7 +190,6 @@ with st.sidebar:
         selected_name = st.selectbox("Instagram 계정", account_names)
         selected_account = next(a for a in accounts if a["name"] == selected_name)
 
-        # 토큰 만료 경고
         expiry = selected_account.get("token_expiry", "")
         if expiry:
             try:
@@ -123,9 +210,15 @@ with st.sidebar:
         help="Figma URL에서 /file/ 뒤의 문자열",
     )
 
+    # Slack 설정 표시
+    slack_url = get_slack_webhook()
+    if slack_url:
+        st.caption("🔔 Slack 알림: 연결됨")
+    else:
+        st.caption("🔕 Slack 알림: 미설정")
+
     st.divider()
 
-    # 계정 관리
     with st.expander("계정 관리"):
         st.caption("새 계정 추가")
         new_name = st.text_input("계정 이름", key="new_name")
@@ -162,7 +255,7 @@ with st.sidebar:
                 st.success(f"'{del_name}' 계정이 삭제되었습니다.")
                 st.rerun()
 
-# ── 메인: Step 1 - 프레임 선택 ────────────────────────────
+# ── 메인: Step 1 - 프레임 선택 (다중 그룹) ────────────────
 
 if not accounts:
     st.info("사이드바에서 Instagram 계정을 먼저 추가해주세요.")
@@ -170,7 +263,6 @@ if not accounts:
 
 st.header("Step 1. 프레임 선택")
 
-# 프레임 목록을 Figma에서 가져오되 캐시 활용
 if "frames" not in st.session_state:
     st.session_state.frames = None
     st.session_state.frame_groups = None
@@ -181,9 +273,7 @@ with col_load:
     if st.button("🔄 프레임 불러오기", use_container_width=True):
         with st.spinner("Figma에서 프레임 목록을 가져오는 중..."):
             figma = FigmaClient()
-            # 인스타그램 v2 페이지의 프레임만 가져오기
             all_frames = figma.get_file_frames(figma_file_key)
-            # "인스타그램" 페이지 프레임만 필터
             ig_frames = [
                 f for f in all_frames if "인스타그램" in f.get("page", "")
             ]
@@ -204,69 +294,47 @@ with col_info:
 if st.session_state.frame_groups:
     groups = st.session_state.frame_groups
 
-    # 날짜 그룹 선택
-    selected_group = st.selectbox(
-        "날짜 선택 (최신순)",
+    # 다중 그룹 선택 (multiselect)
+    selected_groups = st.multiselect(
+        "날짜 선택 (여러 개 선택 가능, 최신순)",
         list(groups.keys()),
         format_func=lambda x: f"{x} ({len(groups[x])}장)",
     )
 
-    if selected_group:
-        group_frames = groups[selected_group]
-        st.caption(f"{selected_group} 시리즈: {len(group_frames)}장")
+    if selected_groups:
+        st.info(f"✅ {len(selected_groups)}개 시리즈 선택됨")
 
-        # 개별 프레임 체크박스
-        selected_frames = []
-        cols = st.columns(min(len(group_frames), 5))
-        for i, frame in enumerate(group_frames):
-            with cols[i % 5]:
-                checked = st.checkbox(
-                    frame["name"],
-                    value=True,
-                    key=f"frame_{frame['id']}",
-                )
-                if checked:
-                    selected_frames.append(frame)
+        # 각 그룹의 프레임 표시 및 개별 선택
+        all_selected = {}  # {group_name: [node_ids]}
+        for grp in selected_groups:
+            group_frames = groups[grp]
+            with st.expander(f"📁 {grp} ({len(group_frames)}장)", expanded=True):
+                selected_frames = []
+                cols = st.columns(min(len(group_frames), 5))
+                for i, frame in enumerate(group_frames):
+                    with cols[i % 5]:
+                        checked = st.checkbox(
+                            frame["name"],
+                            value=True,
+                            key=f"frame_{grp}_{frame['id']}",
+                        )
+                        if checked:
+                            selected_frames.append(frame)
+                st.caption(f"{len(selected_frames)}장 선택")
+                if len(selected_frames) >= 2:
+                    all_selected[grp] = [f["id"] for f in selected_frames]
+                elif len(selected_frames) == 1:
+                    st.warning("캐러셀은 최소 2장 필요합니다.")
 
-        st.info(f"✅ {len(selected_frames)}장 선택됨")
+        st.session_state.all_selected = all_selected
 
-        # 선택된 프레임 ID를 session_state에 저장
-        st.session_state.selected_node_ids = [f["id"] for f in selected_frames]
+# ── 메인: Step 2 - 캡션 & 발행 설정 ──────────────────────
 
-# ── 메인: Step 2 - 미리보기 + 캡션 ───────────────────────
+if st.session_state.get("all_selected"):
+    all_selected = st.session_state.all_selected
 
-if st.session_state.get("selected_node_ids"):
     st.divider()
-    st.header("Step 2. 미리보기 & 캡션")
-
-    node_ids = st.session_state.selected_node_ids
-
-    # 미리보기 이미지 로드
-    if st.button("👁️ 미리보기 불러오기"):
-        with st.spinner("Figma에서 이미지를 가져오는 중..."):
-            figma = FigmaClient()
-            image_urls = figma.export_images(node_ids, fmt="png", scale=1)
-            # URL 순서를 node_ids 순서에 맞춤
-            ordered_urls = []
-            for nid in node_ids:
-                url = image_urls.get(nid)
-                if url:
-                    ordered_urls.append(url)
-            st.session_state.preview_urls = ordered_urls
-
-    if st.session_state.get("preview_urls"):
-        preview_urls = st.session_state.preview_urls
-        cols = st.columns(min(len(preview_urls), 5))
-        for i, url in enumerate(preview_urls):
-            with cols[i % 5]:
-                st.image(url, caption=f"{i + 1}장", use_container_width=True)
-
-    # 캡션 입력
-    caption = st.text_area(
-        "캡션",
-        placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
-        height=100,
-    )
+    st.header("Step 2. 캡션 & 발행 설정")
 
     # 발행 모드
     publish_mode = st.radio(
@@ -289,82 +357,92 @@ if st.session_state.get("selected_node_ids"):
         scheduled_time = datetime.combine(pub_date, pub_time).replace(tzinfo=kst)
         st.caption(f"예약 시간: {scheduled_time.isoformat()}")
 
+    st.divider()
+
+    # 그룹별 캡션 입력
+    captions = {}
+    use_same_caption = st.checkbox("모든 시리즈에 같은 캡션 사용", value=len(all_selected) == 1)
+
+    if use_same_caption:
+        shared_caption = st.text_area(
+            "캡션",
+            placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
+            height=100,
+            key="shared_caption",
+        )
+        for grp in all_selected:
+            captions[grp] = shared_caption
+    else:
+        for grp in all_selected:
+            captions[grp] = st.text_area(
+                f"📁 {grp} 캡션",
+                placeholder=f"{grp} 시리즈 캡션",
+                height=80,
+                key=f"caption_{grp}",
+            )
+
     # ── Step 3: 발행 ──────────────────────────────────────
 
     st.divider()
     st.header("Step 3. 발행")
+
+    st.markdown(f"**{len(all_selected)}개 시리즈**를 **{selected_name}** 계정으로 발행합니다.")
 
     col_confirm, col_publish = st.columns([1, 1])
     with col_confirm:
         confirmed = st.checkbox("발행을 확인합니다")
     with col_publish:
         publish_clicked = st.button(
-            "🚀 Instagram에 발행하기",
+            f"🚀 {len(all_selected)}개 시리즈 발행하기",
             type="primary",
             disabled=not confirmed,
             use_container_width=True,
         )
 
     if publish_clicked and confirmed:
-        if not caption.strip():
-            st.error("캡션을 입력해주세요.")
-        elif len(node_ids) < 2:
-            st.error("캐러셀은 최소 2장의 이미지가 필요합니다.")
+        # 캡션 검증
+        empty_captions = [g for g, c in captions.items() if not c.strip()]
+        if empty_captions:
+            st.error(f"캡션을 입력해주세요: {', '.join(empty_captions)}")
         else:
-            progress = st.progress(0)
-            status = st.status("발행 진행 중...", expanded=True)
+            total = len(all_selected)
+            overall_progress = st.progress(0)
+            results = []
 
-            try:
-                # Step 1: Figma export
-                status.write("📐 Figma에서 이미지 추출 중...")
-                figma = FigmaClient()
-                image_urls = figma.export_images(node_ids, fmt="png", scale=2)
-                progress.progress(20)
+            for idx, (grp, node_ids) in enumerate(all_selected.items()):
+                status = st.status(f"[{idx + 1}/{total}] {grp} 발행 중...", expanded=True)
 
-                # Step 2: Download
-                status.write("⬇️ 이미지 다운로드 중...")
-                local_files = figma.download_images(image_urls)
-                # node_ids 순서에 맞춤
-                ordered_files = []
-                for nid in node_ids:
-                    safe = nid.replace(":", "-")
-                    path = os.path.join("downloads", f"frame_{safe}.png")
-                    if os.path.exists(path):
-                        ordered_files.append(path)
-                progress.progress(40)
-
-                # Step 3: imgbb upload
-                status.write("☁️ 이미지 업로드 중...")
-                host = ImageHost()
-                public_urls = host.upload_batch(ordered_files, expiration=86400)
-                progress.progress(60)
-
-                # Step 4: Instagram publish
-                status.write("📸 Instagram에 발행 중...")
-                ig = InstagramClient()
-                ig.user_id = selected_account["instagram_user_id"]
-                ig.access_token = selected_account["access_token"]
-
-                result = ig.publish_carousel(
-                    public_urls,
-                    caption,
-                    scheduled_time,
+                result_info = publish_one_group(
+                    group_name=grp,
+                    node_ids=node_ids,
+                    caption=captions[grp],
+                    scheduled_time=scheduled_time,
+                    account=selected_account,
+                    status_container=status,
                 )
-                progress.progress(100)
+                results.append(result_info)
 
-                if result["status"] == "published":
-                    status.update(label="발행 완료!", state="complete")
-                    st.success(
-                        f"✅ 발행 성공! Media ID: {result['media_id']}"
-                    )
-                    st.balloons()
+                if result_info["success"]:
+                    if result_info.get("media_id"):
+                        status.update(label=f"✅ {grp} 발행 완료!", state="complete")
+                    else:
+                        status.update(label=f"⏰ {grp} 예약 완료!", state="complete")
                 else:
-                    status.update(label="예약 완료!", state="complete")
-                    st.success(
-                        f"⏰ 예약 완료! Container ID: {result['container_id']}\n\n"
-                        f"발행 시간: {scheduled_time.isoformat()}"
-                    )
+                    status.update(label=f"❌ {grp} 실패: {result_info.get('error', '')[:50]}", state="error")
 
-            except Exception as e:
-                status.update(label="에러 발생", state="error")
-                st.error(f"❌ 발행 실패: {e}")
+                overall_progress.progress((idx + 1) / total)
+
+            # 결과 요약
+            success_count = sum(1 for r in results if r["success"])
+            fail_count = total - success_count
+
+            if fail_count == 0:
+                st.success(f"🎉 {success_count}개 시리즈 모두 발행 성공!")
+                st.balloons()
+            else:
+                st.warning(f"완료: 성공 {success_count}개 / 실패 {fail_count}개")
+
+            # Slack 알림
+            send_slack_notification(results, selected_name)
+            if get_slack_webhook():
+                st.caption("🔔 Slack 알림 전송 완료")

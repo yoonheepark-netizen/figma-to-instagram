@@ -343,6 +343,21 @@ if st.session_state.get("all_selected"):
 
     for grp in all_selected:
         with st.expander(f"📁 {grp} — {len(all_selected[grp])}장", expanded=True):
+            # 미리보기
+            preview_key = f"preview_{grp}"
+            if st.button("👁️ 미리보기", key=f"btn_preview_{grp}"):
+                with st.spinner("Figma에서 이미지 가져오는 중..."):
+                    figma = FigmaClient()
+                    urls = figma.export_images(all_selected[grp], fmt="png", scale=1)
+                    ordered = [urls[nid] for nid in all_selected[grp] if urls.get(nid)]
+                    st.session_state[preview_key] = ordered
+
+            if st.session_state.get(preview_key):
+                preview_cols = st.columns(min(len(st.session_state[preview_key]), 5))
+                for i, url in enumerate(st.session_state[preview_key]):
+                    with preview_cols[i % 5]:
+                        st.image(url, caption=f"{i + 1}장", use_container_width=True)
+
             grp_account = st.selectbox(
                 "계정",
                 account_names,

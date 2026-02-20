@@ -255,13 +255,13 @@ with st.sidebar:
                 st.success(f"'{del_name}' 계정이 삭제되었습니다.")
                 st.rerun()
 
-# ── 메인: Step 1 - 프레임 선택 (다중 그룹) ────────────────
+# ── 메인: Step 1 - 콘텐츠 선택 ─────────────────────────────
 
 if not accounts:
     st.info("사이드바에서 Instagram 계정을 먼저 추가해주세요.")
     st.stop()
 
-st.header("Step 1. 프레임 선택")
+st.header("Step 1. 콘텐츠 선택")
 
 if "frames" not in st.session_state:
     st.session_state.frames = None
@@ -288,7 +288,7 @@ with col_info:
     if st.session_state.frames:
         st.caption(
             f"총 {len(st.session_state.frames)}개 프레임, "
-            f"{len(st.session_state.frame_groups or {})}개 날짜 그룹"
+            f"{len(st.session_state.frame_groups or {})}개 이미지셋"
         )
 
 if st.session_state.frame_groups:
@@ -296,13 +296,13 @@ if st.session_state.frame_groups:
 
     # 다중 그룹 선택 (multiselect)
     selected_groups = st.multiselect(
-        "날짜 선택 (여러 개 선택 가능, 최신순)",
+        "이미지셋 선택 (여러 개 선택 가능, 최신순)",
         list(groups.keys()),
         format_func=lambda x: f"{x} ({len(groups[x])}장)",
     )
 
     if selected_groups:
-        st.info(f"✅ {len(selected_groups)}개 시리즈 선택됨")
+        st.info(f"✅ {len(selected_groups)}개 이미지셋 선택됨")
 
         # 각 그룹의 프레임 표시 및 개별 선택
         all_selected = {}  # {group_name: [node_ids]}

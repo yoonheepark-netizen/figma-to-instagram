@@ -23,6 +23,7 @@ try:
 except ImportError:
     pass
 
+from caption_generator import generate_caption
 from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
@@ -863,6 +864,150 @@ def render_insights_page(account):
             if chart_metrics:
                 st.line_chart(chart_df[chart_metrics])
 
+    # ── 콘텐츠 캘린더 ──
+    st.markdown("---")
+    st.markdown("##### 콘텐츠 캘린더")
+
+    import calendar as _cal
+
+    # 월 이동
+    cal_key = "cal_month_offset"
+    if cal_key not in st.session_state:
+        st.session_state[cal_key] = 0
+
+    cal_nav1, cal_nav2, cal_nav3 = st.columns([1, 3, 1])
+    with cal_nav1:
+        if st.button("◀ 이전 달", key="cal_prev", use_container_width=True):
+            st.session_state[cal_key] -= 1
+            st.rerun()
+    with cal_nav3:
+        if st.button("다음 달 ▶", key="cal_next", use_container_width=True):
+            st.session_state[cal_key] += 1
+            st.rerun()
+
+    today = datetime.now()
+    cal_month = today.month + st.session_state[cal_key]
+    cal_year = today.year
+    while cal_month < 1:
+        cal_month += 12
+        cal_year -= 1
+    while cal_month > 12:
+        cal_month -= 12
+        cal_year += 1
+
+    with cal_nav2:
+        st.markdown(
+            f"<div style='text-align:center;font-size:16px;font-weight:600;padding:6px'>{cal_year}년 {cal_month}월</div>",
+            unsafe_allow_html=True,
+        )
+
+    # 게시물 날짜별 매핑
+    post_by_date = defaultdict(list)
+    for p in posts:
+        ts = p.get("timestamp", "")
+        if ts:
+            d = ts[:10]
+            post_by_date[d].append(p)
+
+    # 달력 그리드
+    first_weekday, num_days = _cal.monthrange(cal_year, cal_month)
+    # 한국식: 월=0
+    day_headers = ["월", "화", "수", "목", "금", "토", "일"]
+    header_html = "".join(
+        f'<th style="padding:6px;font-size:12px;color:#6b7280;text-align:center;font-weight:600">{d}</th>'
+        for d in day_headers
+    )
+
+    rows_html = ""
+    day_num = 1
+    # first_weekday: 0=Monday in calendar module
+    for week in range(6):
+        if day_num > num_days:
+            break
+        cells = ""
+        for dow in range(7):
+            if (week == 0 and dow < first_weekday) or day_num > num_days:
+                cells += '<td style="padding:4px;border:1px solid #f3f4f6;height:64px"></td>'
+            else:
+                date_str = f"{cal_year}-{cal_month:02d}-{day_num:02d}"
+                day_posts = post_by_date.get(date_str, [])
+                is_today = (cal_year == today.year and cal_month == today.month and day_num == today.day)
+
+                if day_posts:
+                    n = len(day_posts)
+                    total_eng = sum(
+                        (dp.get("like_count", 0) or 0) + (dp.get("comments_count", 0) or 0)
+                        for dp in day_posts
+                    )
+                    # 포맷 아이콘
+                    icons = []
+                    for dp in day_posts:
+                        mt = dp.get("media_type", "")
+                        if mt == "CAROUSEL_ALBUM":
+                            icons.append("📑")
+                        elif mt == "VIDEO" or dp.get("media_product_type") == "REELS":
+                            icons.append("🎬")
+                        else:
+                            icons.append("📷")
+                    icon_str = " ".join(icons[:3])
+                    bg = "#eef2ff"
+                    border_c = "#818cf8"
+                    cell_content = (
+                        f'<div style="font-size:11px;font-weight:600;color:#4338ca">{day_num}</div>'
+                        f'<div style="font-size:11px;margin-top:2px">{icon_str}</div>'
+                        f'<div style="font-size:10px;color:#6366f1;margin-top:1px">♥{total_eng:,}</div>'
+                    )
+                else:
+                    bg = "#ffffff"
+                    border_c = "#f3f4f6"
+                    cell_content = f'<div style="font-size:11px;color:#9ca3af">{day_num}</div>'
+
+                if is_today:
+                    bg = "#fef3c7"
+                    border_c = "#f59e0b"
+
+                cells += (
+                    f'<td style="padding:4px;border:1px solid {border_c};height:64px;'
+                    f'vertical-align:top;background:{bg};border-radius:4px">{cell_content}</td>'
+                )
+                day_num += 1
+        rows_html += f"<tr>{cells}</tr>"
+
+    cal_html = (
+        f'<table style="width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed">'
+        f'<thead><tr>{header_html}</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table>'
+    )
+    st.markdown(cal_html, unsafe_allow_html=True)
+
+    # 게시 빈도 요약
+    month_posts = [
+        p for p in posts
+        if p.get("timestamp", "")[:7] == f"{cal_year}-{cal_month:02d}"
+    ]
+    month_count = len(month_posts)
+    weeks_in_month = (num_days + first_weekday + 6) // 7
+    avg_per_week = round(month_count / max(weeks_in_month, 1), 1)
+
+    # 연속 미게시 일수 계산
+    max_gap = 0
+    if posts:
+        post_dates = sorted(set(p.get("timestamp", "")[:10] for p in posts if p.get("timestamp")))
+        for i in range(1, len(post_dates)):
+            try:
+                d1 = datetime.strptime(post_dates[i - 1], "%Y-%m-%d")
+                d2 = datetime.strptime(post_dates[i], "%Y-%m-%d")
+                gap = (d2 - d1).days - 1
+                if gap > max_gap:
+                    max_gap = gap
+            except ValueError:
+                pass
+
+    freq_parts = [f"이번 달 **{month_count}개** 게시 · 주 평균 **{avg_per_week}개**"]
+    if max_gap >= 3:
+        freq_parts.append(f"  ⚠️ 최대 **{max_gap}일** 연속 미게시 구간이 있습니다")
+    st.caption(" | ".join(freq_parts))
+
     # ── 콘텐츠 분석 ──
     st.markdown("---")
     st.markdown("##### 콘텐츠 분석")
@@ -871,12 +1016,12 @@ def render_insights_page(account):
     non_reels = [p for p in posts if p.get("media_product_type") != "REELS"]
     has_reels = has_insights and len(reels_posts) >= 2
 
-    tab_names = ["포맷별", "캡션 길이별", "요일별", "TOP / WORST"]
+    tab_names = ["포맷별", "캡션 길이별", "요일별", "TOP / WORST", "게시 시간"]
     if has_reels:
         tab_names.append("릴스")
     all_tabs = st.tabs(tab_names)
-    tab_fmt, tab_cap, tab_day, tab_rank = all_tabs[:4]
-    tab_reels = all_tabs[4] if has_reels else None
+    tab_fmt, tab_cap, tab_day, tab_rank, tab_time = all_tabs[:5]
+    tab_reels = all_tabs[5] if has_reels else None
 
     with tab_fmt:
         format_stats = defaultdict(lambda: {"count": 0, "likes": 0, "comments": 0, "saved": 0, "shares": 0, "views": 0, "reach": 0})
@@ -1289,6 +1434,160 @@ def render_insights_page(account):
                 f'<p style="font-size:13px;margin:0">{formula_html}</p>'
                 f'<p style="font-size:12px;color:#64748b;margin:6px 0 0">이 공식을 기본으로 하되, 주 1회 실험적 콘텐츠를 섞어 새로운 성과 패턴을 발굴하세요.</p>'
             )), unsafe_allow_html=True)
+
+    # ── 게시 시간 탭 ──
+    with tab_time:
+        if has_insights:
+            # 시간별 참여도 계산
+            hour_stats = defaultdict(lambda: {"count": 0, "eng": 0})
+            dow_hour_stats = defaultdict(lambda: defaultdict(lambda: {"count": 0, "eng": 0}))
+            day_names_kr = ["월", "화", "수", "목", "금", "토", "일"]
+
+            for p in posts:
+                ts = p.get("timestamp", "")
+                if len(ts) < 13:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    # UTC → KST (+9)
+                    kst_dt = dt + timedelta(hours=9)
+                    h = kst_dt.hour
+                    dow = kst_dt.weekday()  # 0=Mon
+                except (ValueError, AttributeError):
+                    continue
+
+                eng = (p.get("like_count", 0) or 0) + (p.get("comments_count", 0) or 0) * 3
+                ins = p.get("insights", {})
+                eng += (ins.get("saved", 0) or 0) * 2 + (ins.get("shares", 0) or 0) * 3
+
+                hour_stats[h]["count"] += 1
+                hour_stats[h]["eng"] += eng
+                dow_hour_stats[dow][h]["count"] += 1
+                dow_hour_stats[dow][h]["eng"] += eng
+
+            if hour_stats:
+                # 요일×시간 히트맵
+                st.markdown("**요일 × 시간대 참여도 히트맵**")
+                st.caption("색이 진할수록 평균 참여도가 높은 시간대입니다 (KST)")
+
+                # 최대값 계산
+                max_eng_avg = 1
+                heatmap_data = {}
+                for dow in range(7):
+                    for h in range(24):
+                        s = dow_hour_stats[dow][h]
+                        if s["count"] > 0:
+                            avg = s["eng"] / s["count"]
+                            heatmap_data[(dow, h)] = avg
+                            if avg > max_eng_avg:
+                                max_eng_avg = avg
+
+                # 히트맵 HTML
+                h_headers = "".join(
+                    f'<th style="padding:2px 4px;font-size:10px;color:#9ca3af;text-align:center;min-width:28px">{h}</th>'
+                    for h in range(24)
+                )
+                heatmap_rows = ""
+                for dow in range(7):
+                    cells = ""
+                    for h in range(24):
+                        avg = heatmap_data.get((dow, h), 0)
+                        intensity = avg / max_eng_avg if max_eng_avg > 0 else 0
+                        # 보라색 그라데이션
+                        alpha = round(intensity * 0.85 + 0.05, 2) if avg > 0 else 0.02
+                        count = dow_hour_stats[dow][h]["count"]
+                        title = f"{day_names_kr[dow]} {h}시: 평균 {int(avg)} (게시 {count}건)" if count > 0 else ""
+                        cells += (
+                            f'<td style="padding:2px;text-align:center;background:rgba(99,102,241,{alpha});'
+                            f'border-radius:3px;font-size:9px;color:{"#fff" if alpha > 0.5 else "#6b7280"}" '
+                            f'title="{title}">'
+                            f'{"●" if count > 0 else ""}</td>'
+                        )
+                    heatmap_rows += (
+                        f'<tr><td style="padding:2px 6px;font-size:11px;font-weight:600;color:#374151;white-space:nowrap">'
+                        f'{day_names_kr[dow]}</td>{cells}</tr>'
+                    )
+
+                heatmap_html = (
+                    f'<div style="overflow-x:auto">'
+                    f'<table style="border-collapse:separate;border-spacing:2px;width:100%">'
+                    f'<thead><tr><th></th>{h_headers}</tr></thead>'
+                    f'<tbody>{heatmap_rows}</tbody></table></div>'
+                )
+                st.markdown(heatmap_html, unsafe_allow_html=True)
+
+                # TOP 3 최적 게시 시간
+                st.markdown("")
+                st.markdown("**TOP 3 최적 게시 시간**")
+
+                slot_list = []
+                for (dow, h), avg in heatmap_data.items():
+                    cnt = dow_hour_stats[dow][h]["count"]
+                    if cnt >= 1:
+                        slot_list.append((avg, dow, h, cnt))
+                slot_list.sort(reverse=True)
+
+                if slot_list:
+                    top_slots = slot_list[:3]
+                    # session_state에 저장 (Step 2 추천 시간 힌트용)
+                    st.session_state["best_posting_slots"] = [
+                        {"day": day_names_kr[dow], "hour": h, "eng_avg": int(avg)}
+                        for avg, dow, h, cnt in top_slots
+                    ]
+
+                    slot_cols = st.columns(min(len(top_slots), 3))
+                    medals = ["🥇", "🥈", "🥉"]
+                    for i, (avg, dow, h, cnt) in enumerate(top_slots):
+                        with slot_cols[i]:
+                            st.markdown(_card_accent.format(
+                                bg="#f0f0ff", border="#c7d2fe",
+                                content=(
+                                    f'<div style="text-align:center">'
+                                    f'<span style="font-size:24px">{medals[i]}</span>'
+                                    f'<p style="font-size:15px;font-weight:700;margin:6px 0 2px;color:#4338ca">'
+                                    f'{day_names_kr[dow]}요일 {h:02d}:00</p>'
+                                    f'<p style="font-size:12px;color:#6b7280;margin:0">'
+                                    f'평균 참여 {int(avg):,} · {cnt}건</p>'
+                                    f'</div>'
+                                ),
+                            ), unsafe_allow_html=True)
+
+                # 시간대 그룹별 분석
+                st.markdown("**시간대 그룹별 분석**")
+                time_groups = {
+                    "🌅 아침 (6-9시)": range(6, 10),
+                    "☀️ 점심 (11-13시)": range(11, 14),
+                    "🌤️ 오후 (14-17시)": range(14, 18),
+                    "🌆 저녁 (18-21시)": range(18, 22),
+                    "🌙 밤 (22-1시)": list(range(22, 24)) + [0, 1],
+                }
+                tg_data = []
+                for label, hours in time_groups.items():
+                    g_count = sum(hour_stats[h]["count"] for h in hours)
+                    g_eng = sum(hour_stats[h]["eng"] for h in hours)
+                    g_avg = round(g_eng / g_count) if g_count > 0 else 0
+                    tg_data.append({"시간대": label, "게시 수": g_count, "평균 참여": f"{g_avg:,}"})
+
+                tg_cols = st.columns(len(tg_data))
+                best_tg = max(tg_data, key=lambda x: int(x["평균 참여"].replace(",", ""))) if tg_data else None
+                for i, tg in enumerate(tg_data):
+                    is_best = (tg == best_tg)
+                    with tg_cols[i]:
+                        bg = "#eef2ff" if is_best else "#f8f9fa"
+                        bd = "#818cf8" if is_best else "#e9ecef"
+                        badge = ' <span style="font-size:10px;background:#4338ca;color:#fff;padding:1px 5px;border-radius:8px">BEST</span>' if is_best else ""
+                        st.markdown(_card_accent.format(
+                            bg=bg, border=bd,
+                            content=(
+                                f'<p style="font-size:12px;font-weight:600;margin:0 0 4px">{tg["시간대"]}{badge}</p>'
+                                f'<p style="font-size:18px;font-weight:700;color:#374151;margin:0">{tg["평균 참여"]}</p>'
+                                f'<p style="font-size:11px;color:#6b7280;margin:2px 0 0">평균 참여 · {tg["게시 수"]}건</p>'
+                            ),
+                        ), unsafe_allow_html=True)
+            else:
+                st.caption("게시 시간 데이터가 부족합니다.")
+        else:
+            st.caption("인사이트 데이터가 없어 게시 시간 분석을 할 수 없습니다.")
 
     # ── 릴스 탭 ──
     if tab_reels is not None:
@@ -2128,10 +2427,77 @@ if st.session_state.get("all_selected"):
                 key=f"account_{grp}",
             )
 
+            # ── AI 캡션 생성 ──
+            col_tone, col_ai_btn = st.columns([2, 1])
+            with col_tone:
+                ai_tone = st.selectbox(
+                    "캡션 톤",
+                    ["정보성", "감성", "유머", "전문적"],
+                    key=f"tone_{grp}",
+                )
+            with col_ai_btn:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                ai_clicked = st.button("✨ AI 캡션 생성", key=f"ai_caption_{grp}", use_container_width=True)
+
+            if ai_clicked:
+                with st.spinner("AI가 캡션을 생성하고 있습니다..."):
+                    try:
+                        # 이미지 URL 수집
+                        img_urls = []
+                        grp_info = all_selected[grp]
+                        if grp_info["source"] == "figma" and st.session_state.get(f"preview_{grp}"):
+                            img_urls = st.session_state[f"preview_{grp}"][:3]
+                        elif grp_info["source"] == "url":
+                            img_urls = grp_info["urls"][:3]
+
+                        # 인사이트 데이터에서 키워드/해시태그/캡션 추출
+                        top_kw, top_ht, top_caps = [], [], []
+                        posts = st.session_state.get("insights_posts", {}).get("data", [])
+                        if posts:
+                            scored = []
+                            for p in posts:
+                                eng = (p.get("like_count", 0)
+                                       + p.get("comments_count", 0) * 3)
+                                scored.append((eng, p))
+                            scored.sort(key=lambda x: x[0], reverse=True)
+                            top_caps = [
+                                p.get("caption", "")
+                                for _, p in scored[:5]
+                                if p.get("caption")
+                            ]
+                            # 키워드 추출
+                            kw_counter = Counter()
+                            ht_counter = Counter()
+                            for _, p in scored[:15]:
+                                cap = p.get("caption", "")
+                                kw_counter.update(
+                                    w for w in re.findall(r"[가-힣]{2,}", cap)
+                                    if len(w) >= 2
+                                )
+                                ht_counter.update(
+                                    re.findall(r"#([\w가-힣]+)", cap)
+                                )
+                            top_kw = [w for w, _ in kw_counter.most_common(10)]
+                            top_ht = [t for t, _ in ht_counter.most_common(10)]
+
+                        result = generate_caption(
+                            image_urls=img_urls or None,
+                            account_name=grp_account,
+                            past_top_captions=top_caps or None,
+                            top_keywords=top_kw or None,
+                            top_hashtags=top_ht or None,
+                            tone=ai_tone,
+                        )
+                        st.session_state[f"caption_{grp}"] = result["full"]
+                        st.success("캡션이 생성되었습니다!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"캡션 생성 실패: {e}")
+
             caption = st.text_area(
                 "캡션",
                 placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
-                height=80,
+                height=120,
                 key=f"caption_{grp}",
             )
 
@@ -2160,6 +2526,12 @@ if st.session_state.get("all_selected"):
                 kst = timezone(timedelta(hours=9))
                 scheduled_time = datetime.combine(pub_date, pub_time).replace(tzinfo=kst)
                 st.caption(f"예약 시간: {scheduled_time.isoformat()}")
+
+                # 추천 시간 힌트
+                best_slots = st.session_state.get("best_posting_slots", [])
+                if best_slots:
+                    hints = [f'{s["day"]} {s["hour"]:02d}:00' for s in best_slots[:3]]
+                    st.info(f"📊 추천 게시 시간: {' / '.join(hints)} (인사이트 기반)")
 
             group_settings[grp] = {
                 "caption": caption,

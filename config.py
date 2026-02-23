@@ -33,6 +33,9 @@ class Config:
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
     PENCIL_GIST_ID = os.getenv("PENCIL_GIST_ID")
 
+    # Anthropic (캡션 생성)
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
     # API versions
     GRAPH_API_VERSION = "v21.0"
     GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"

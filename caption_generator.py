@@ -1,4 +1,5 @@
 import random
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -154,56 +155,92 @@ _BODY_TEMPLATES = [
 ]
 
 
-def _build_from_image_texts(image_texts, top_hashtags=None, tone="정보성"):
-    """이미지에서 추출한 텍스트를 수壽 캡션 포맷으로 변환합니다."""
-    # 텍스트 정리: 빈 문자열 제거, 중복 제거, 순서 유지
-    seen = set()
-    cleaned = []
-    for t in image_texts:
-        t = t.strip()
-        if t and t not in seen:
-            seen.add(t)
-            cleaned.append(t)
+def _is_valid_line(line):
+    """OCR 라인이 의미 있는 텍스트인지 판단합니다."""
+    line = line.strip()
+    if not line:
+        return False
+    # 5자 미만은 대부분 노이즈 (조사/어미 파편)
+    if len(line) < 5:
+        return False
+    # 한글이 2자 이상 포함되어야 의미 있는 한국어 문장
+    korean_chars = len(re.findall(r"[가-힣]", line))
+    alpha_chars = len(re.findall(r"[a-zA-Z]", line))
+    if korean_chars < 2 and alpha_chars < 4:
+        return False
+    # 특수문자 비율이 40% 이상이면 노이즈
+    special = len(re.findall(r"[^가-힣a-zA-Z0-9\s.,!?~ㅡ·\'\"()『』:;]", line))
+    if len(line) > 0 and special / len(line) > 0.4:
+        return False
+    # 완전한 문장이 아닌 파편 (조사/어미로만 시작하는 것) 필터
+    if re.match(r"^[은는이가을를의에서로도와과만]", line) and korean_chars < 5:
+        return False
+    return True
 
-    if not cleaned:
+
+def _clean_ocr_line(line):
+    """OCR 라인의 노이즈를 정리합니다."""
+    # 줄 앞뒤 특수문자 제거
+    line = re.sub(r"^[\|\[\]「」{}\s\-ㅡ]+", "", line)
+    line = re.sub(r"[\|\[\]「」{}\s\-]+$", "", line)
+    # OCR에서 흔한 오인식 교정
+    line = line.replace("\\바", "억")  # 80\바 → 80억
+    line = line.replace("!", "!").replace("?", "?")
+    return line.strip()
+
+
+def _clean_ocr_texts(raw_texts):
+    """OCR 원본 텍스트를 정제하여 의미 있는 문장만 반환합니다."""
+    cleaned = []
+    seen = set()
+
+    for raw in raw_texts:
+        # 줄 단위로 분리하여 처리
+        for line in raw.split("\n"):
+            line = _clean_ocr_line(line)
+            if not _is_valid_line(line):
+                continue
+            # URL, 브랜드명 등은 캡션 본문에서 제외 (시그니처에 이미 포함)
+            lower = line.lower()
+            if any(skip in lower for skip in ["thesoo", "@thesoo", "수壽", "수수", "공식 홈페이지"]):
+                continue
+            if line not in seen:
+                seen.add(line)
+                cleaned.append(line)
+
+    return cleaned
+
+
+def _build_from_image_texts(image_texts, top_hashtags=None, tone="정보성"):
+    """이미지에서 추출한 텍스트를 정제 후 수壽 캡션 포맷으로 변환합니다."""
+    cleaned = _clean_ocr_texts(image_texts)
+
+    if len(cleaned) < 2:
         return None
 
-    # 첫 번째 텍스트를 헤드라인으로 사용
+    # 첫 번째 의미 있는 문장을 헤드라인으로
     hook = cleaned[0]
 
-    # 나머지를 본문으로 구성 (수壽 스타일: 짧은 줄 + 줄바꿈)
+    # 나머지를 본문으로 구성 (짧은 줄은 줄바꿈, 단락 구분은 빈 줄)
     body_lines = cleaned[1:]
-
-    # 본문 포맷팅: 긴 텍스트는 줄바꿈 삽입, 짧은 텍스트는 단락 구분
     body_parts = []
+    current_group = []
     for line in body_lines:
-        # 이미 줄바꿈이 있으면 그대로
-        if "\n" in line:
-            body_parts.append(line)
-        # 40자 이상이면 적절히 줄바꿈
-        elif len(line) > 40:
-            mid = len(line) // 2
-            # 가장 가까운 공백이나 쉼표에서 줄바꿈
-            split_pos = line.rfind(" ", 0, mid + 10)
-            if split_pos == -1:
-                split_pos = line.rfind(",", 0, mid + 10)
-            if split_pos > 0:
-                body_parts.append(line[:split_pos + 1].rstrip() + "\n" + line[split_pos + 1:].lstrip())
-            else:
-                body_parts.append(line)
-        else:
-            body_parts.append(line)
+        current_group.append(line)
+        # 마침표/물음표/느낌표로 끝나거나 3줄 모이면 단락 구분
+        if line.endswith((".", "요.", "요", "다.", "다", "!")) or len(current_group) >= 3:
+            body_parts.append("\n".join(current_group))
+            current_group = []
+    if current_group:
+        body_parts.append("\n".join(current_group))
 
-    body = "\n\n".join(body_parts) if body_parts else ""
+    body = "\n\n".join(body_parts)
 
     # CTA
     cta = random.choice(_CTAS)
 
-    # 조합
-    if body:
-        caption = f"{hook}\n\n{body} \n\n{cta} \n\n{_SIGNATURE}"
-    else:
-        caption = f"{hook} \n\n{cta} \n\n{_SIGNATURE}"
+    # 조합 (수壽 스타일)
+    caption = f"{hook}\n\n{body} \n\n{cta} \n\n{_SIGNATURE}"
 
     # 해시태그
     tags = list(_BRAND_HASHTAGS)

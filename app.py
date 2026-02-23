@@ -440,87 +440,10 @@ def render_insights_page(account):
             if chart_metrics:
                 st.line_chart(df[chart_metrics])
 
-    st.divider()
-
-    # ── 정렬 ──
-    sort_options = {
-        "최신순": None,
-        "❤️ 좋아요 많은 순": "likes",
-        "💬 댓글 많은 순": "comments",
-        "📌 저장 많은 순": "saved",
-        "🔄 공유 많은 순": "shares",
-        "👁️ 조회 많은 순": "views",
-        "📣 도달 많은 순": "reach",
-    }
-    sort_choice = st.selectbox("정렬", list(sort_options.keys()), index=0, key="insights_sort")
-    sort_key = sort_options[sort_choice]
-    if sort_key:
-        posts = sorted(posts, key=lambda p: p.get("insights", {}).get(sort_key, 0) or 0, reverse=True)
-
-    # ── 게시물 카드 그리드 ──
-    type_label = {"IMAGE": "📷 이미지", "VIDEO": "🎬 동영상", "CAROUSEL_ALBUM": "📑 캐러셀"}
-
-    for row_start in range(0, len(posts), 3):
-        row_posts = posts[row_start:row_start + 3]
-        cols = st.columns(3)
-        for col, post in zip(cols, row_posts):
-            with col:
-                # 릴스/동영상은 thumbnail_url 우선, 이미지는 media_url 우선
-                is_video = post.get("media_type") == "VIDEO"
-                is_reels = post.get("media_product_type") == "REELS"
-
-                if is_video or is_reels:
-                    video_url = post.get("media_url")
-                    if video_url:
-                        st.video(video_url)
-                    else:
-                        thumb = post.get("thumbnail_url")
-                        if thumb:
-                            st.image(thumb, use_container_width=True)
-                        else:
-                            st.info("🎬 영상 로드 불가")
-                else:
-                    media_url = post.get("media_url") or post.get("thumbnail_url")
-                    if media_url:
-                        try:
-                            st.image(media_url, use_container_width=True)
-                        except Exception:
-                            st.info("🖼️ 이미지 로드 불가")
-                    else:
-                        st.info("🖼️ 썸네일 없음")
-
-                ts = post.get("timestamp", "")[:10]
-                if is_reels:
-                    mtype = "🎬 릴스"
-                else:
-                    mtype = type_label.get(post.get("media_type", ""), "기타")
-                st.caption(f"{ts} · {mtype}")
-
-                ins = {k: v for k, v in post.get("insights", {}).items()
-                       if k != "_errors"}
-                likes = ins.get("likes", "–")
-                comments = ins.get("comments", "–")
-                saves = ins.get("saved", "–")
-                shares = ins.get("shares", "–")
-                views = ins.get("views", "–")
-                reach = ins.get("reach", "–")
-
-                st.markdown(f"❤️ **{likes}**  💬 **{comments}**  📌 **{saves}**  🔄 **{shares}**")
-                st.caption(f"👁️ 조회 {views:,}  ·  📣 도달 {reach:,}" if isinstance(views, int) else f"👁️ 조회 {views}  ·  📣 도달 {reach}")
-
-                caption = post.get("caption") or ""
-                if caption:
-                    st.caption(caption[:80] + ("..." if len(caption) > 80 else ""))
-
-                permalink = post.get("permalink", "")
-                if permalink:
-                    st.markdown(f"[Instagram에서 보기]({permalink})")
-
     # ── 콘텐츠 인사이트 분석 ──
     st.divider()
     st.subheader("🔍 콘텐츠 인사이트 분석")
 
-    import pandas as pd
     from collections import defaultdict
 
     # --- 포맷별 성과 비교 ---
@@ -551,7 +474,6 @@ def render_insights_page(account):
         fmt_df = pd.DataFrame(fmt_rows).set_index("포맷")
         st.dataframe(fmt_df, use_container_width=True)
 
-        # 최고 포맷 찾기
         best_engage_fmt = max(format_stats.items(), key=lambda x: (x[1]["likes"] + x[1]["comments"] + x[1]["saved"]) / x[1]["count"])
         best_reach_fmt = max(format_stats.items(), key=lambda x: x[1]["reach"] / x[1]["count"])
         st.info(f"💡 **참여율(좋아요+댓글+저장)** 가장 높은 포맷: **{best_engage_fmt[0]}** · **도달** 가장 높은 포맷: **{best_reach_fmt[0]}**")
@@ -639,6 +561,80 @@ def render_insights_page(account):
             st.markdown(text)
 
     st.divider()
+
+    # ── 정렬 ──
+    sort_options = {
+        "최신순": None,
+        "❤️ 좋아요 많은 순": "likes",
+        "💬 댓글 많은 순": "comments",
+        "📌 저장 많은 순": "saved",
+        "🔄 공유 많은 순": "shares",
+        "👁️ 조회 많은 순": "views",
+        "📣 도달 많은 순": "reach",
+    }
+    sort_choice = st.selectbox("정렬", list(sort_options.keys()), index=0, key="insights_sort")
+    sort_key = sort_options[sort_choice]
+    if sort_key:
+        posts = sorted(posts, key=lambda p: p.get("insights", {}).get(sort_key, 0) or 0, reverse=True)
+
+    # ── 게시물 카드 그리드 ──
+    type_label = {"IMAGE": "📷 이미지", "VIDEO": "🎬 동영상", "CAROUSEL_ALBUM": "📑 캐러셀"}
+
+    for row_start in range(0, len(posts), 3):
+        row_posts = posts[row_start:row_start + 3]
+        cols = st.columns(3)
+        for col, post in zip(cols, row_posts):
+            with col:
+                # 릴스/동영상은 thumbnail_url 우선, 이미지는 media_url 우선
+                is_video = post.get("media_type") == "VIDEO"
+                is_reels = post.get("media_product_type") == "REELS"
+
+                if is_video or is_reels:
+                    video_url = post.get("media_url")
+                    if video_url:
+                        st.video(video_url)
+                    else:
+                        thumb = post.get("thumbnail_url")
+                        if thumb:
+                            st.image(thumb, use_container_width=True)
+                        else:
+                            st.info("🎬 영상 로드 불가")
+                else:
+                    media_url = post.get("media_url") or post.get("thumbnail_url")
+                    if media_url:
+                        try:
+                            st.image(media_url, use_container_width=True)
+                        except Exception:
+                            st.info("🖼️ 이미지 로드 불가")
+                    else:
+                        st.info("🖼️ 썸네일 없음")
+
+                ts = post.get("timestamp", "")[:10]
+                if is_reels:
+                    mtype = "🎬 릴스"
+                else:
+                    mtype = type_label.get(post.get("media_type", ""), "기타")
+                st.caption(f"{ts} · {mtype}")
+
+                ins = {k: v for k, v in post.get("insights", {}).items()
+                       if k != "_errors"}
+                likes = ins.get("likes", "–")
+                comments = ins.get("comments", "–")
+                saves = ins.get("saved", "–")
+                shares = ins.get("shares", "–")
+                views = ins.get("views", "–")
+                reach = ins.get("reach", "–")
+
+                st.markdown(f"❤️ **{likes}**  💬 **{comments}**  📌 **{saves}**  🔄 **{shares}**")
+                st.caption(f"👁️ 조회 {views:,}  ·  📣 도달 {reach:,}" if isinstance(views, int) else f"👁️ 조회 {views}  ·  📣 도달 {reach}")
+
+                caption = post.get("caption") or ""
+                if caption:
+                    st.caption(caption[:80] + ("..." if len(caption) > 80 else ""))
+
+                permalink = post.get("permalink", "")
+                if permalink:
+                    st.markdown(f"[Instagram에서 보기]({permalink})")
 
     # ── CSV 다운로드 ──
 

@@ -55,10 +55,24 @@ class PencilClient:
         return [img["url"] for img in series_data.get("images", [])]
 
     def _fetch_manifest(self, gist_id):
-        """GitHub Gist에서 매니페스트 JSON을 가져옵니다."""
-        url = f"{self.GIST_RAW_BASE}/{gist_id}/raw/{self.MANIFEST_FILE}"
-        logger.info(f"  Gist 매니페스트 로드: {gist_id}")
+        """GitHub Gist에서 매니페스트 JSON을 가져옵니다.
 
+        gist_id 형식:
+            - "gist_id" → GitHub API로 owner를 자동 조회
+            - "owner/gist_id" → 직접 raw URL 생성
+        """
+        if "/" in gist_id:
+            owner, gid = gist_id.split("/", 1)
+            url = f"{self.GIST_RAW_BASE}/{owner}/{gid}/raw/{self.MANIFEST_FILE}"
+        else:
+            # API로 owner를 조회한 뒤 raw URL 구성
+            api_url = f"https://api.github.com/gists/{gist_id}"
+            api_resp = requests.get(api_url, timeout=10)
+            api_resp.raise_for_status()
+            owner = api_resp.json().get("owner", {}).get("login", "")
+            url = f"{self.GIST_RAW_BASE}/{owner}/{gist_id}/raw/{self.MANIFEST_FILE}"
+
+        logger.info(f"  Gist 매니페스트 로드: {gist_id}")
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         return resp.json()

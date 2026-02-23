@@ -48,7 +48,7 @@ class GistManager:
         """새 Gist를 생성합니다. gist_id를 반환합니다."""
         payload = {
             "description": description,
-            "public": False,
+            "public": True,
             "files": {
                 MANIFEST_FILENAME: {
                     "content": json.dumps(manifest, ensure_ascii=False, indent=2)

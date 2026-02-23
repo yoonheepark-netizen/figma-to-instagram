@@ -544,6 +544,132 @@ def render_insights_page(account):
             for i, p in enumerate(reversed(ranked[-3:]), 1):
                 st.markdown(f"**{i}.** {_rank_row(p)}")
 
+        # ── 패턴 분석 & 인사이트 ──
+        if len(ranked) >= 6:
+            top_n = ranked[:max(3, len(ranked) // 4)]
+            worst_n = ranked[-max(3, len(ranked) // 4):]
+
+            def _analyze_group(group):
+                fmts = defaultdict(int)
+                cap_lens = []
+                days = defaultdict(int)
+                has_hashtag = 0
+                has_cta = 0
+                has_question = 0
+                avg_reach = []
+                day_names_kr = ["월", "화", "수", "목", "금", "토", "일"]
+                for p in group:
+                    fmts[_fmt_type(p)] += 1
+                    cap = p.get("caption") or ""
+                    cap_lens.append(len(cap))
+                    if "#" in cap:
+                        has_hashtag += 1
+                    if any(w in cap for w in ["링크", "확인", "클릭", "바로가기", "구매", "신청", "DM", "댓글"]):
+                        has_cta += 1
+                    if "?" in cap:
+                        has_question += 1
+                    ts = p.get("timestamp", "")[:10]
+                    if ts:
+                        try:
+                            days[day_names_kr[datetime.strptime(ts, "%Y-%m-%d").weekday()]] += 1
+                        except ValueError:
+                            pass
+                    avg_reach.append(p.get("insights", {}).get("reach", 0) or 0)
+                n = len(group)
+                top_fmt = max(fmts.items(), key=lambda x: x[1])[0] if fmts else "–"
+                top_fmt_pct = round(max(fmts.values()) / n * 100) if fmts else 0
+                top_day = max(days.items(), key=lambda x: x[1])[0] if days else "–"
+                return {
+                    "top_fmt": top_fmt, "top_fmt_pct": top_fmt_pct,
+                    "avg_cap": round(sum(cap_lens) / n) if cap_lens else 0,
+                    "hashtag_pct": round(has_hashtag / n * 100),
+                    "cta_pct": round(has_cta / n * 100),
+                    "question_pct": round(has_question / n * 100),
+                    "top_day": top_day,
+                    "avg_reach": round(sum(avg_reach) / n) if avg_reach else 0,
+                }
+
+            top_a = _analyze_group(top_n)
+            worst_a = _analyze_group(worst_n)
+
+            st.markdown("---")
+            st.markdown("###### 콘텐츠 인사이트")
+
+            # Do's
+            dos = []
+            if top_a["top_fmt_pct"] >= 50:
+                dos.append(f"**{top_a['top_fmt']}** 포맷이 상위 콘텐츠의 {top_a['top_fmt_pct']}%를 차지합니다. 이 포맷을 주력으로 활용하세요.")
+            if top_a["avg_cap"] > worst_a["avg_cap"] + 30:
+                dos.append(f"상위 콘텐츠의 평균 캡션 길이는 **{top_a['avg_cap']}자**로, 하위({worst_a['avg_cap']}자)보다 깁니다. 충분한 맥락을 담아주세요.")
+            elif top_a["avg_cap"] < worst_a["avg_cap"] - 30:
+                dos.append(f"상위 콘텐츠의 평균 캡션 길이는 **{top_a['avg_cap']}자**로, 하위({worst_a['avg_cap']}자)보다 짧습니다. 간결한 메시지가 효과적입니다.")
+            if top_a["hashtag_pct"] > worst_a["hashtag_pct"] + 15:
+                dos.append(f"상위 콘텐츠의 **{top_a['hashtag_pct']}%**가 해시태그를 사용합니다. 관련 해시태그를 적극 활용하세요.")
+            if top_a["cta_pct"] > worst_a["cta_pct"] + 15:
+                dos.append(f"상위 콘텐츠의 **{top_a['cta_pct']}%**에 행동 유도 문구(CTA)가 포함되어 있습니다. 댓글·DM·링크 등 CTA를 넣어보세요.")
+            if top_a["question_pct"] > worst_a["question_pct"] + 15:
+                dos.append(f"상위 콘텐츠의 **{top_a['question_pct']}%**에 질문이 포함되어 있습니다. 팔로워와의 소통을 유도하세요.")
+            if top_a["top_day"]:
+                dos.append(f"상위 콘텐츠는 **{top_a['top_day']}요일**에 집중되어 있습니다. 이 요일에 게시하는 것을 권장합니다.")
+
+            if not dos:
+                dos.append(f"상위 콘텐츠의 주요 포맷은 **{top_a['top_fmt']}**, 평균 캡션 **{top_a['avg_cap']}자**, 주요 게시 요일 **{top_a['top_day']}요일**입니다.")
+
+            # Don'ts
+            donts = []
+            if worst_a["top_fmt_pct"] >= 50 and worst_a["top_fmt"] != top_a["top_fmt"]:
+                donts.append(f"하위 콘텐츠의 {worst_a['top_fmt_pct']}%가 **{worst_a['top_fmt']}** 포맷입니다. 이 포맷의 비중을 줄여보세요.")
+            if worst_a["hashtag_pct"] < top_a["hashtag_pct"] - 15:
+                donts.append(f"하위 콘텐츠의 해시태그 사용률이 **{worst_a['hashtag_pct']}%**로 낮습니다. 해시태그 없이 올리지 마세요.")
+            if worst_a["cta_pct"] < top_a["cta_pct"] - 15:
+                donts.append(f"하위 콘텐츠의 CTA 포함률이 **{worst_a['cta_pct']}%**로 낮습니다. 행동 유도 없는 단순 게시는 참여를 떨어뜨립니다.")
+            if worst_a["avg_cap"] > top_a["avg_cap"] + 50:
+                donts.append(f"하위 콘텐츠의 캡션이 평균 **{worst_a['avg_cap']}자**로 너무 깁니다. 핵심만 전달하세요.")
+            elif worst_a["avg_cap"] < 20:
+                donts.append(f"하위 콘텐츠의 캡션이 평균 **{worst_a['avg_cap']}자**로 너무 짧습니다. 최소한의 설명을 덧붙이세요.")
+            if worst_a["top_day"] and worst_a["top_day"] != top_a["top_day"]:
+                donts.append(f"하위 콘텐츠는 **{worst_a['top_day']}요일**에 집중되어 있습니다. 이 요일은 피하는 것이 좋습니다.")
+
+            if not donts:
+                donts.append(f"하위 콘텐츠의 주요 포맷은 **{worst_a['top_fmt']}**, 평균 캡션 **{worst_a['avg_cap']}자**, 주요 게시 요일 **{worst_a['top_day']}요일**입니다.")
+
+            col_do, col_dont = st.columns(2)
+            with col_do:
+                st.markdown("**Do's**")
+                for d in dos:
+                    st.markdown(f"- {d}")
+            with col_dont:
+                st.markdown("**Don'ts**")
+                for d in donts:
+                    st.markdown(f"- {d}")
+
+            # 방향성 제안
+            st.markdown("###### 콘텐츠 방향성 제안")
+            directions = []
+            if top_a["top_fmt"] == "릴스":
+                directions.append("릴스가 높은 참여를 이끌어내고 있습니다. 숏폼 영상 비중을 늘리고, 트렌드 음원이나 빠른 편집을 활용해 보세요.")
+            elif top_a["top_fmt"] == "캐러셀":
+                directions.append("캐러셀이 가장 효과적입니다. 정보를 슬라이드로 나눠 전달하고, 마지막 장에 CTA를 배치하세요.")
+            elif top_a["top_fmt"] == "이미지":
+                directions.append("단일 이미지가 잘 먹히는 계정입니다. 비주얼 퀄리티에 집중하고, 한 장으로 시선을 끄는 썸네일을 만들어 보세요.")
+
+            if top_a["avg_reach"] > 0:
+                reach_ratio = top_a["avg_reach"] / max(worst_a["avg_reach"], 1)
+                if reach_ratio >= 2:
+                    directions.append(f"상위 콘텐츠의 평균 도달({top_a['avg_reach']:,})이 하위({worst_a['avg_reach']:,})의 {reach_ratio:.1f}배입니다. 알고리즘 확산이 잘 되는 콘텐츠의 패턴을 반복하세요.")
+
+            if top_a["question_pct"] > 30:
+                directions.append("질문형 캡션이 참여에 효과적입니다. '여러분은 어떤가요?', '어떻게 생각하세요?' 같은 열린 질문을 꾸준히 넣어주세요.")
+
+            if top_a["cta_pct"] > 40:
+                directions.append("CTA가 포함된 게시물의 성과가 좋습니다. 저장·공유 유도, 댓글 참여 요청 등 구체적인 행동을 제안하세요.")
+
+            if not directions:
+                directions.append(f"**{top_a['top_fmt']}** 포맷 + **{top_a['avg_cap']}자 내외 캡션** + **{top_a['top_day']}요일 게시**를 기본 공식으로 삼고, 매주 실험적 콘텐츠 1개를 섞어보세요.")
+
+            for d in directions:
+                st.markdown(f"- {d}")
+
     # ── 게시물 목록 ──
     st.markdown("---")
     st.markdown("##### 게시물 목록")

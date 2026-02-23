@@ -641,6 +641,162 @@ def render_insights_page(account):
                     f'<ul style="padding-left:18px;margin:0">{items_html}</ul>'
                 )), unsafe_allow_html=True)
 
+    # ── 팔로워 관심사 분석 (게시물 반응 기반) ──
+    if has_insights and len(posts) >= 3:
+        st.markdown("---")
+        st.markdown("##### 팔로워 관심사 분석")
+        st.caption("게시물별 참여도를 분석하여 팔로워가 어떤 주제·키워드·해시태그에 반응하는지 추론합니다.")
+
+        stopwords = {"이", "그", "저", "것", "수", "등", "및", "더", "에", "의", "를", "을", "가", "은", "는",
+                     "으로", "로", "에서", "와", "과", "도", "만", "까지", "부터", "에게", "보다",
+                     "처럼", "같이", "위해", "대해", "통해", "따라", "대한", "있는", "없는", "하는", "되는",
+                     "합니다", "입니다", "있습니다", "됩니다", "하세요", "주세요", "있어요", "해요", "했어요",
+                     "하고", "하면", "않은", "않는", "우리", "오늘", "정말", "함께", "모든", "지금", "바로",
+                     "아주", "많은", "좋은", "새로운", "가장", "매우", "항상", "때문", "이런", "저런", "그런"}
+
+        # 게시물별 참여도 계산
+        def _eng_score(p):
+            ins = p.get("insights", {})
+            return (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) * 3 + (ins.get("saved", 0) or 0) * 2 + (ins.get("shares", 0) or 0) * 3
+
+        # 키워드별 평균 참여도
+        kw_eng = defaultdict(list)
+        ht_eng = defaultdict(list)
+        for p in posts:
+            cap = p.get("caption") or ""
+            score = _eng_score(p)
+            words = [w for w in re.findall(r"[가-힣]{2,}", cap) if w not in stopwords]
+            for w in set(words):
+                kw_eng[w].append(score)
+            hashtags = re.findall(r"#([가-힣a-zA-Z0-9_]+)", cap)
+            for ht in set(hashtags):
+                ht_eng[ht].append(score)
+
+        # 2회 이상 등장한 키워드만 (우연 제거)
+        kw_stats = [(w, sum(scores) / len(scores), len(scores))
+                    for w, scores in kw_eng.items() if len(scores) >= 2]
+        kw_stats.sort(key=lambda x: x[1], reverse=True)
+        top_kw = kw_stats[:10]
+
+        ht_stats = [(ht, sum(scores) / len(scores), len(scores))
+                    for ht, scores in ht_eng.items() if len(scores) >= 2]
+        ht_stats.sort(key=lambda x: x[1], reverse=True)
+        top_ht = ht_stats[:8]
+
+        int_tab1, int_tab2, int_tab3 = st.tabs(["관심 키워드", "해시태그 반응", "관심사 요약"])
+
+        with int_tab1:
+            if top_kw:
+                kw_html_rows = ""
+                max_eng = top_kw[0][1] if top_kw else 1
+                for rank, (w, avg_eng, cnt) in enumerate(top_kw, 1):
+                    bar_pct = round(avg_eng / max(max_eng, 1) * 100)
+                    kw_html_rows += (
+                        f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+                        f'<span style="font-size:12px;color:#6b7280;width:20px;text-align:right">{rank}</span>'
+                        f'<span style="font-size:13px;font-weight:600;width:80px">{w}</span>'
+                        f'<div style="flex:1;background:#e5e7eb;border-radius:4px;height:20px;overflow:hidden">'
+                        f'<div style="width:{bar_pct}%;height:100%;background:linear-gradient(90deg,#818cf8,#6366f1);border-radius:4px"></div></div>'
+                        f'<span style="font-size:12px;color:#374151;width:70px;text-align:right">평균 {avg_eng:,.0f}</span>'
+                        f'<span style="font-size:11px;color:#9ca3af;width:40px">({cnt}회)</span>'
+                        f'</div>'
+                    )
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:13px;font-weight:600;margin:0 0 12px">팔로워가 가장 반응하는 키워드</p>'
+                    f'<p style="font-size:11px;color:#6b7280;margin:0 0 12px">참여도 = 좋아요 + 댓글×3 + 저장×2 + 공유×3</p>'
+                    f'{kw_html_rows}'
+                )), unsafe_allow_html=True)
+            else:
+                st.caption("키워드 분석에 충분한 데이터가 없습니다 (동일 키워드 2회 이상 등장 필요).")
+
+        with int_tab2:
+            if top_ht:
+                ht_tags = ""
+                max_ht_eng = top_ht[0][1] if top_ht else 1
+                for ht, avg_eng, cnt in top_ht:
+                    intensity = min(round(avg_eng / max(max_ht_eng, 1) * 100), 100)
+                    r = 99 - int(intensity * 0.6)
+                    g = 102 - int(intensity * 0.4)
+                    b = 241
+                    ht_tags += (
+                        f'<span style="display:inline-block;background:rgba({r},{g},{b},{max(0.15, intensity/100)});'
+                        f'color:#312e81;border-radius:16px;padding:6px 14px;font-size:13px;font-weight:500;margin:4px 3px">'
+                        f'#{ht} <span style="font-size:11px;color:#6366f1">({avg_eng:,.0f} · {cnt}회)</span></span>'
+                    )
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:13px;font-weight:600;margin:0 0 8px">반응 높은 해시태그</p>'
+                    f'<p style="font-size:11px;color:#6b7280;margin:0 0 12px">색이 진할수록 참여도가 높은 해시태그</p>'
+                    f'<div>{ht_tags}</div>'
+                )), unsafe_allow_html=True)
+            else:
+                st.caption("해시태그 분석에 충분한 데이터가 없습니다.")
+
+        with int_tab3:
+            # 관심사 클러스터 추론
+            interest_clusters = {
+                "뷰티/스킨케어": ["피부", "케어", "스킨", "보습", "세럼", "크림", "화장", "메이크업", "뷰티", "클렌징", "선크림", "팩"],
+                "건강/웰니스": ["건강", "운동", "다이어트", "영양", "비타민", "면역", "수면", "스트레스", "요가", "필라테스", "헬스"],
+                "패션/스타일": ["코디", "패션", "스타일", "옷", "착용", "트렌드", "컬러", "데일리", "룩"],
+                "음식/맛집": ["맛집", "레시피", "음식", "카페", "디저트", "요리", "브런치", "맛있", "식단"],
+                "라이프스타일": ["일상", "루틴", "집", "인테리어", "정리", "생활", "습관", "아침", "저녁"],
+                "여행": ["여행", "호텔", "관광", "제주", "바다", "풍경", "숙소", "액티비티"],
+                "교육/정보": ["팁", "방법", "가이드", "추천", "비교", "리뷰", "정보", "알려", "소개"],
+                "이벤트/프로모션": ["이벤트", "할인", "세일", "쿠폰", "혜택", "무료", "증정", "기간", "선착순"],
+            }
+            all_captions_text = " ".join(p.get("caption", "") or "" for p in posts)
+            cluster_scores = {}
+            for cluster, keywords in interest_clusters.items():
+                matched = [(kw, avg) for kw, avg, _ in kw_stats if kw in keywords]
+                mention_count = sum(1 for kw in keywords if kw in all_captions_text)
+                if mention_count >= 1:
+                    avg_score = sum(a for _, a in matched) / len(matched) if matched else 0
+                    cluster_scores[cluster] = {"mentions": mention_count, "avg_eng": avg_score, "matched_kw": [k for k, _ in matched]}
+
+            if cluster_scores:
+                sorted_clusters = sorted(cluster_scores.items(), key=lambda x: (x[1]["mentions"], x[1]["avg_eng"]), reverse=True)
+
+                cluster_html = ""
+                for cluster_name, info in sorted_clusters[:5]:
+                    mentions = info["mentions"]
+                    avg_e = info["avg_eng"]
+                    matched = info["matched_kw"]
+                    bar_label = f"관련 키워드 {mentions}개"
+                    if avg_e > 0:
+                        bar_label += f" · 평균 참여 {avg_e:,.0f}"
+                    kw_list = ", ".join(matched[:4]) if matched else "–"
+                    cluster_html += (
+                        f'<div style="background:#f5f3ff;border:1px solid #e0e7ff;border-radius:8px;padding:12px 16px;margin-bottom:8px">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                        f'<span style="font-size:13px;font-weight:600;color:#3730a3">{cluster_name}</span>'
+                        f'<span style="font-size:11px;color:#6366f1">{bar_label}</span>'
+                        f'</div>'
+                        f'<p style="font-size:11px;color:#6b7280;margin:0">반응 키워드: {kw_list}</p>'
+                        f'</div>'
+                    )
+
+                # 관심사 요약 인사이트
+                top_cluster = sorted_clusters[0][0] if sorted_clusters else ""
+                summary_items = []
+                summary_items.append(f"팔로워의 주요 관심사는 **{top_cluster}** 영역에 집중되어 있습니다.")
+                if len(sorted_clusters) >= 2:
+                    second = sorted_clusters[1][0]
+                    summary_items.append(f"**{second}** 관련 콘텐츠도 높은 반응을 보이고 있어, 교차 주제 콘텐츠가 효과적일 수 있습니다.")
+                if len(sorted_clusters) >= 3:
+                    others = ", ".join(c[0] for c in sorted_clusters[2:4])
+                    summary_items.append(f"보조 관심사: {others} — 주기적으로 변주를 줘보세요.")
+
+                summary_html = "".join(f'<li style="margin-bottom:6px;font-size:13px">{s}</li>' for s in summary_items)
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:13px;font-weight:600;margin:0 0 12px">팔로워 관심사 분포</p>'
+                    f'{cluster_html}'
+                    f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid #e5e7eb">'
+                    f'<p style="font-size:12px;font-weight:600;color:#374151;margin:0 0 6px">인사이트</p>'
+                    f'<ul style="padding-left:18px;margin:0">{summary_html}</ul>'
+                    f'</div>'
+                )), unsafe_allow_html=True)
+            else:
+                st.caption("캡션 데이터가 부족하여 관심사를 분류할 수 없습니다.")
+
     st.markdown("---")
 
     # ── 요약 지표 ──

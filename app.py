@@ -729,7 +729,7 @@ if "pencil_series" not in st.session_state:
 if "pencil_manifest" not in st.session_state:
     st.session_state.pencil_manifest = None
 
-tab_figma, tab_pencil, tab_upload, tab_url = st.tabs(["📐 Figma", "✏️ Pencil.dev", "📷 이미지 업로드", "🔗 URL 입력"])
+tab_figma, tab_pencil, tab_upload, tab_url, tab_cardnews = st.tabs(["📐 Figma", "✏️ Pencil.dev", "📷 이미지 업로드", "🔗 URL 입력", "🎨 카드뉴스 만들기"])
 
 figma_selected = {}  # Figma 탭에서 선택된 항목
 

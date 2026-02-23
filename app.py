@@ -637,16 +637,25 @@ def render_insights_page(account):
                 f'{cap}{"..." if len(p.get("caption","") or "") > 60 else ""}</p>'
             ))
 
+        def _render_rank_section(title, posts, color_bg, color_border):
+            st.markdown(f'<p style="font-size:13px;font-weight:600;margin-bottom:8px">{title}</p>', unsafe_allow_html=True)
+            for i, p in enumerate(posts, 1):
+                st.markdown(_rank_card(p, i, color_bg, color_border), unsafe_allow_html=True)
+                thumb = p.get("thumbnail_url") or p.get("media_url")
+                if thumb:
+                    is_reels = p.get("media_product_type") == "REELS"
+                    is_video = p.get("media_type") == "VIDEO"
+                    if (is_reels or is_video) and p.get("media_url"):
+                        st.video(p["media_url"])
+                    else:
+                        st.image(thumb, use_container_width=True)
+
         if len(ranked) >= 3:
             col_top, col_worst = st.columns(2)
             with col_top:
-                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">TOP 3</p>', unsafe_allow_html=True)
-                for i, p in enumerate(ranked[:3], 1):
-                    st.markdown(_rank_card(p, i, "#f0fdf4", "#22c55e"), unsafe_allow_html=True)
+                _render_rank_section("TOP 3", ranked[:3], "#f0fdf4", "#22c55e")
             with col_worst:
-                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">WORST 3</p>', unsafe_allow_html=True)
-                for i, p in enumerate(reversed(ranked[-3:]), 1):
-                    st.markdown(_rank_card(p, i, "#fef2f2", "#ef4444"), unsafe_allow_html=True)
+                _render_rank_section("WORST 3", list(reversed(ranked[-3:])), "#fef2f2", "#ef4444")
 
         # ── 패턴 분석 & 인사이트 ──
         if len(ranked) >= 6:

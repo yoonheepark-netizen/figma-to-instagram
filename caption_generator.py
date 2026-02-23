@@ -1,5 +1,5 @@
 import logging
-from config import Config
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def generate_caption(
     Returns:
         dict: {"caption": str, "hashtags": str, "full": str}
     """
-    api_key = Config.ANTHROPIC_API_KEY
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
 

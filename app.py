@@ -529,7 +529,7 @@ with st.sidebar:
 
     pencil_gist_id = st.text_input(
         "Pencil Gist ID",
-        value=os.getenv("PENCIL_GIST_ID", ""),
+        value=os.getenv("PENCIL_GIST_ID", "8fe8dc21eb2e4c8a9dc2b8c48a559c36"),
         help="cardupload 스크립트가 생성한 GitHub Gist ID",
     )
 

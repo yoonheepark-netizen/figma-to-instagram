@@ -275,25 +275,37 @@ def publish_one_group(group_name, group_info, caption, scheduled_time, account, 
 # ── 인사이트 페이지 ──────────────────────────────────────
 
 
+def _fmt_type(post):
+    """게시물 포맷 텍스트를 반환합니다."""
+    if post.get("media_product_type") == "REELS":
+        return "릴스"
+    return {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(post.get("media_type", ""), "기타")
+
+
 def render_insights_page(account):
     """콘텐츠 인사이트 페이지를 렌더링합니다."""
-    st.header("📊 콘텐츠 인사이트")
-    st.caption(f"계정: **{account['name']}** — 사이드바에서 변경 가능")
-
     from datetime import datetime, date, timedelta
+    from collections import defaultdict
+    import pandas as pd
+    import csv, io
 
-    date_range = st.date_input("게시일", value=(date.today() - timedelta(days=30), date.today()), key="insights_date_range")
+    st.markdown("## 콘텐츠 인사이트")
+    st.caption(f"계정: **{account['name']}**")
+
+    # ── 조회 조건 ──
+    date_range = st.date_input(
+        "게시일", value=(date.today() - timedelta(days=30), date.today()),
+        key="insights_date_range",
+    )
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         date_from, date_to = date_range
     else:
         date_from = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
         date_to = date_from
 
-    import csv, io
-
     col_btn_fetch, col_btn_csv = st.columns([3, 1])
     with col_btn_fetch:
-        fetch_clicked = st.button("📊 게시물 조회", use_container_width=True)
+        fetch_clicked = st.button("조회", use_container_width=True, type="primary")
     with col_btn_csv:
         if st.session_state.get("insights_posts"):
             csv_posts = st.session_state.insights_posts
@@ -304,29 +316,26 @@ def render_insights_page(account):
                 ins = p.get("insights", {})
                 writer.writerow([
                     p.get("timestamp", "")[:10],
-                    p.get("_resolved_type", p.get("media_type", "")),
+                    _fmt_type(p),
                     (p.get("caption") or "")[:100],
-                    ins.get("likes", 0),
-                    ins.get("comments", 0),
-                    ins.get("saved", 0),
-                    ins.get("shares", 0),
-                    ins.get("views", 0),
-                    ins.get("reach", 0),
+                    ins.get("likes", 0), ins.get("comments", 0),
+                    ins.get("saved", 0), ins.get("shares", 0),
+                    ins.get("views", 0), ins.get("reach", 0),
                 ])
-            st.download_button("📥 CSV", buf.getvalue(), file_name="insights.csv", mime="text/csv", use_container_width=True)
+            st.download_button("CSV 다운로드", buf.getvalue(), file_name="insights.csv", mime="text/csv", use_container_width=True)
         else:
-            st.button("📥 CSV", disabled=True, use_container_width=True)
+            st.button("CSV 다운로드", disabled=True, use_container_width=True)
 
+    # ── 데이터 fetch ──
     if fetch_clicked:
         ig = InstagramClient()
         ig.user_id = account["instagram_user_id"].strip()
         ig.access_token = account["access_token"].strip()
 
-        with st.spinner("게시물 목록 조회 중..."):
+        with st.spinner("게시물 조회 중..."):
             media_data = ig.get_media_list(limit=50)
             all_posts = media_data.get("data", [])
 
-        # 기간 필터 적용
         posts = []
         for p in all_posts:
             ts = p.get("timestamp", "")[:10]
@@ -341,20 +350,18 @@ def render_insights_page(account):
                 posts.append(p)
 
         if not posts:
-            st.info("게시물이 없습니다.")
+            st.info("해당 기간에 게시물이 없습니다.")
             return
 
-        progress = st.progress(0, text="인사이트 데이터 수집 중...")
+        progress = st.progress(0, text="인사이트 수집 중...")
         insight_errors = []
         for i, post in enumerate(posts):
             try:
                 mtype = post.get("media_type", "IMAGE")
-                # 릴스 판별: media_product_type이 REELS이면 릴스
                 if post.get("media_product_type") == "REELS":
                     mtype = "REEL"
                 post["_resolved_type"] = mtype
                 post["insights"] = ig.get_media_insights(post["id"], media_type=mtype)
-                # 첫 번째 에러만 수집 (진단용)
                 if "_errors" in post["insights"] and not insight_errors:
                     insight_errors = post["insights"]["_errors"]
             except Exception as e:
@@ -365,52 +372,41 @@ def render_insights_page(account):
         progress.empty()
 
         if insight_errors:
-            with st.expander("⚠️ 인사이트 조회 중 오류 발생 (클릭하여 상세 보기)"):
+            with st.expander("인사이트 조회 중 일부 오류 발생"):
                 for err in insight_errors:
                     st.code(err)
-                st.info("instagram_manage_insights 권한이 필요합니다. "
-                        "Meta 개발자 콘솔에서 권한을 확인하세요.")
+                st.caption("instagram_manage_insights 권한이 필요합니다.")
 
         st.session_state.insights_posts = posts
 
     if not st.session_state.get("insights_posts"):
-        st.info("기간을 설정한 후 '게시물 조회' 버튼을 클릭하세요.")
+        st.info("기간을 설정한 후 조회 버튼을 눌러주세요.")
         return
 
     posts = st.session_state.insights_posts
-    st.caption(f"기간: {date_from} ~ {date_to} · {len(posts)}개 게시물")
 
-    # ── 요약 지표 ──
-    def _safe_sum(key):
+    def _safe(key):
         return sum(p.get("insights", {}).get(key, 0) for p in posts
                    if isinstance(p.get("insights", {}).get(key, 0), (int, float)))
 
-    total_likes = _safe_sum("likes")
-    total_comments = _safe_sum("comments")
-    total_saves = _safe_sum("saved")
-    total_shares = _safe_sum("shares")
-    total_views = _safe_sum("views")
-    total_reach = _safe_sum("reach")
-
-    # 인사이트 데이터가 하나라도 있는지 체크
     has_insights = any(
         p.get("insights", {}).get("reach") is not None
         for p in posts if "_errors" not in p.get("insights", {})
     )
+    na = "–"
 
-    na = "–"  # 인사이트 없을 때 표시
+    # ── 요약 지표 ──
+    st.markdown(f"##### {date_from} ~ {date_to} · {len(posts)}개 게시물")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("❤️ 좋아요", f"{total_likes:,}" if has_insights else na)
-    m2.metric("💬 댓글", f"{total_comments:,}" if has_insights else na)
-    m3.metric("📌 저장", f"{total_saves:,}" if has_insights else na)
-    m4.metric("🔄 공유", f"{total_shares:,}" if has_insights else na)
-    m5.metric("👁️ 조회", f"{total_views:,}" if has_insights else na)
-    m6.metric("📣 도달", f"{total_reach:,}" if has_insights else na)
+    m1.metric("좋아요", f"{_safe('likes'):,}" if has_insights else na)
+    m2.metric("댓글", f"{_safe('comments'):,}" if has_insights else na)
+    m3.metric("저장", f"{_safe('saved'):,}" if has_insights else na)
+    m4.metric("공유", f"{_safe('shares'):,}" if has_insights else na)
+    m5.metric("조회", f"{_safe('views'):,}" if has_insights else na)
+    m6.metric("도달", f"{_safe('reach'):,}" if has_insights else na)
 
-    # ── 일자별 추이 차트 ──
+    # ── 일자별 추이 ──
     if has_insights:
-        import pandas as pd
-
         chart_rows = []
         for p in posts:
             ts = p.get("timestamp", "")[:10]
@@ -428,164 +424,149 @@ def render_insights_page(account):
             })
 
         if chart_rows:
-            df = pd.DataFrame(chart_rows)
-            df["날짜"] = pd.to_datetime(df["날짜"])
-            df = df.groupby("날짜").sum().sort_index()
+            chart_df = pd.DataFrame(chart_rows)
+            chart_df["날짜"] = pd.to_datetime(chart_df["날짜"])
+            chart_df = chart_df.groupby("날짜").sum().sort_index()
 
-            st.subheader("📈 일자별 추이")
+            st.markdown("---")
+            st.markdown("##### 일자별 추이")
             chart_metrics = st.multiselect(
-                "지표 선택", ["좋아요", "댓글", "저장", "공유", "조회", "도달"],
-                default=["좋아요", "조회", "도달"], key="insights_chart_metrics"
+                "지표", ["좋아요", "댓글", "저장", "공유", "조회", "도달"],
+                default=["좋아요", "조회", "도달"], key="insights_chart_metrics",
+                label_visibility="collapsed",
             )
             if chart_metrics:
-                st.line_chart(df[chart_metrics])
+                st.line_chart(chart_df[chart_metrics])
 
-    # ── 콘텐츠 인사이트 분석 ──
-    st.divider()
-    st.subheader("🔍 콘텐츠 인사이트 분석")
+    # ── 콘텐츠 분석 ──
+    st.markdown("---")
+    st.markdown("##### 콘텐츠 분석")
 
-    from collections import defaultdict
+    tab_fmt, tab_cap, tab_day, tab_rank = st.tabs(["포맷별", "캡션 길이별", "요일별", "TOP / WORST"])
 
-    # --- 포맷별 성과 비교 ---
-    format_stats = defaultdict(lambda: {"count": 0, "likes": 0, "comments": 0, "saved": 0, "shares": 0, "views": 0, "reach": 0})
-    for p in posts:
-        is_reels = p.get("media_product_type") == "REELS"
-        fmt = "릴스" if is_reels else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "기타")
-        ins = p.get("insights", {})
-        format_stats[fmt]["count"] += 1
-        for k in ["likes", "comments", "saved", "shares", "views", "reach"]:
-            format_stats[fmt][k] += (ins.get(k, 0) or 0)
+    with tab_fmt:
+        format_stats = defaultdict(lambda: {"count": 0, "likes": 0, "comments": 0, "saved": 0, "shares": 0, "views": 0, "reach": 0})
+        for p in posts:
+            fmt = _fmt_type(p)
+            ins = p.get("insights", {})
+            format_stats[fmt]["count"] += 1
+            for k in ["likes", "comments", "saved", "shares", "views", "reach"]:
+                format_stats[fmt][k] += (ins.get(k, 0) or 0)
 
-    if format_stats:
-        st.markdown("#### 📋 포맷별 평균 성과")
-        fmt_rows = []
-        for fmt, s in format_stats.items():
-            cnt = s["count"]
-            fmt_rows.append({
-                "포맷": fmt,
-                "게시물 수": cnt,
-                "평균 좋아요": round(s["likes"] / cnt),
-                "평균 댓글": round(s["comments"] / cnt),
-                "평균 저장": round(s["saved"] / cnt),
-                "평균 공유": round(s["shares"] / cnt),
-                "평균 조회": round(s["views"] / cnt),
-                "평균 도달": round(s["reach"] / cnt),
-            })
-        fmt_df = pd.DataFrame(fmt_rows).set_index("포맷")
-        st.dataframe(fmt_df, use_container_width=True)
+        if format_stats:
+            fmt_rows = []
+            for fmt, s in format_stats.items():
+                cnt = s["count"]
+                fmt_rows.append({
+                    "포맷": fmt, "게시물": cnt,
+                    "평균 좋아요": round(s["likes"] / cnt),
+                    "평균 댓글": round(s["comments"] / cnt),
+                    "평균 저장": round(s["saved"] / cnt),
+                    "평균 공유": round(s["shares"] / cnt),
+                    "평균 조회": round(s["views"] / cnt),
+                    "평균 도달": round(s["reach"] / cnt),
+                })
+            st.dataframe(pd.DataFrame(fmt_rows).set_index("포맷"), use_container_width=True)
 
-        best_engage_fmt = max(format_stats.items(), key=lambda x: (x[1]["likes"] + x[1]["comments"] + x[1]["saved"]) / x[1]["count"])
-        best_reach_fmt = max(format_stats.items(), key=lambda x: x[1]["reach"] / x[1]["count"])
-        st.info(f"💡 **참여율(좋아요+댓글+저장)** 가장 높은 포맷: **{best_engage_fmt[0]}** · **도달** 가장 높은 포맷: **{best_reach_fmt[0]}**")
+            best_engage = max(format_stats.items(), key=lambda x: (x[1]["likes"] + x[1]["comments"] + x[1]["saved"]) / x[1]["count"])
+            best_reach = max(format_stats.items(), key=lambda x: x[1]["reach"] / x[1]["count"])
+            st.info(f"참여 최고: **{best_engage[0]}** · 도달 최고: **{best_reach[0]}**")
 
-    # --- 캡션 길이별 성과 ---
-    st.markdown("#### ✏️ 캡션 길이별 성과")
-    caption_buckets = {"짧음 (~50자)": [], "보통 (50~150자)": [], "긴 글 (150자~)": []}
-    for p in posts:
-        cap_len = len(p.get("caption") or "")
-        ins = p.get("insights", {})
-        engagement = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
-        if cap_len <= 50:
-            caption_buckets["짧음 (~50자)"].append(engagement)
-        elif cap_len <= 150:
-            caption_buckets["보통 (50~150자)"].append(engagement)
-        else:
-            caption_buckets["긴 글 (150자~)"].append(engagement)
+    with tab_cap:
+        buckets = {"~50자": [], "50~150자": [], "150자~": []}
+        for p in posts:
+            cap_len = len(p.get("caption") or "")
+            ins = p.get("insights", {})
+            eng = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+            if cap_len <= 50:
+                buckets["~50자"].append(eng)
+            elif cap_len <= 150:
+                buckets["50~150자"].append(eng)
+            else:
+                buckets["150자~"].append(eng)
 
-    cap_rows = []
-    for label, vals in caption_buckets.items():
-        if vals:
-            cap_rows.append({"캡션 길이": label, "게시물 수": len(vals), "평균 참여": round(sum(vals) / len(vals))})
-    if cap_rows:
-        st.dataframe(pd.DataFrame(cap_rows).set_index("캡션 길이"), use_container_width=True)
+        cap_rows = [{"길이": k, "게시물": len(v), "평균 참여": round(sum(v) / len(v))} for k, v in buckets.items() if v]
+        if cap_rows:
+            st.dataframe(pd.DataFrame(cap_rows).set_index("길이"), use_container_width=True)
 
-    # --- 요일별 성과 ---
-    st.markdown("#### 📅 요일별 평균 성과")
-    day_names = ["월", "화", "수", "목", "금", "토", "일"]
-    day_stats = defaultdict(lambda: {"count": 0, "likes": 0, "reach": 0, "engagement": 0})
-    for p in posts:
-        ts = p.get("timestamp", "")[:10]
-        if not ts:
-            continue
-        try:
-            d = datetime.strptime(ts, "%Y-%m-%d")
-            day = day_names[d.weekday()]
-        except ValueError:
-            continue
-        ins = p.get("insights", {})
-        day_stats[day]["count"] += 1
-        day_stats[day]["likes"] += (ins.get("likes", 0) or 0)
-        day_stats[day]["reach"] += (ins.get("reach", 0) or 0)
-        day_stats[day]["engagement"] += (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+    with tab_day:
+        day_names = ["월", "화", "수", "목", "금", "토", "일"]
+        day_stats = defaultdict(lambda: {"count": 0, "likes": 0, "reach": 0, "engagement": 0})
+        for p in posts:
+            ts = p.get("timestamp", "")[:10]
+            if not ts:
+                continue
+            try:
+                weekday = datetime.strptime(ts, "%Y-%m-%d").weekday()
+            except ValueError:
+                continue
+            ins = p.get("insights", {})
+            day = day_names[weekday]
+            day_stats[day]["count"] += 1
+            day_stats[day]["likes"] += (ins.get("likes", 0) or 0)
+            day_stats[day]["reach"] += (ins.get("reach", 0) or 0)
+            day_stats[day]["engagement"] += (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
 
-    if day_stats:
         day_rows = []
         for day in day_names:
             if day in day_stats:
                 s = day_stats[day]
                 cnt = s["count"]
-                day_rows.append({"요일": day, "게시물 수": cnt, "평균 좋아요": round(s["likes"] / cnt), "평균 도달": round(s["reach"] / cnt), "평균 참여": round(s["engagement"] / cnt)})
+                day_rows.append({"요일": day, "게시물": cnt, "평균 좋아요": round(s["likes"] / cnt), "평균 도달": round(s["reach"] / cnt), "평균 참여": round(s["engagement"] / cnt)})
         if day_rows:
             st.dataframe(pd.DataFrame(day_rows).set_index("요일"), use_container_width=True)
             best_day = max(day_rows, key=lambda x: x["평균 참여"])
-            st.info(f"💡 **{best_day['요일']}요일**에 올린 게시물의 평균 참여가 가장 높습니다.")
+            st.info(f"**{best_day['요일']}요일** 게시물의 평균 참여가 가장 높습니다.")
 
-    # --- TOP / WORST 게시물 ---
-    ranked = sorted(posts, key=lambda p: (p.get("insights", {}).get("likes", 0) or 0) + (p.get("insights", {}).get("comments", 0) or 0) + (p.get("insights", {}).get("saved", 0) or 0), reverse=True)
+    with tab_rank:
+        ranked = sorted(posts, key=lambda p: (p.get("insights", {}).get("likes", 0) or 0) + (p.get("insights", {}).get("comments", 0) or 0) + (p.get("insights", {}).get("saved", 0) or 0), reverse=True)
 
-    if len(ranked) >= 3:
-        st.markdown("#### 🏆 TOP 3 게시물 (참여 기준)")
-        for i, p in enumerate(ranked[:3], 1):
+        def _rank_row(p):
             ins = p.get("insights", {})
-            engage = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
-            cap = (p.get("caption") or "")[:60]
+            eng = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+            cap = (p.get("caption") or "")[:50]
             ts = p.get("timestamp", "")[:10]
             link = p.get("permalink", "")
-            fmt = "릴스" if p.get("media_product_type") == "REELS" else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "")
-            text = f"**{i}위** · {ts} · {fmt} · 참여 {engage:,} (❤️{ins.get('likes',0) or 0} 💬{ins.get('comments',0) or 0} 📌{ins.get('saved',0) or 0}) · {cap}{'...' if len(p.get('caption','')or'') > 60 else ''}"
+            fmt = _fmt_type(p)
+            text = f"{ts} · {fmt} · 참여 **{eng:,}** (좋아요 {ins.get('likes',0) or 0} / 댓글 {ins.get('comments',0) or 0} / 저장 {ins.get('saved',0) or 0})"
+            if cap:
+                text += f"  \n{cap}{'...' if len(p.get('caption','') or '') > 50 else ''}"
             if link:
-                text += f" [↗]({link})"
-            st.markdown(text)
+                text += f" [링크]({link})"
+            return text
 
-        st.markdown("#### ⚠️ WORST 3 게시물 (참여 기준)")
-        for i, p in enumerate(ranked[-3:], 1):
-            ins = p.get("insights", {})
-            engage = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
-            cap = (p.get("caption") or "")[:60]
-            ts = p.get("timestamp", "")[:10]
-            link = p.get("permalink", "")
-            fmt = "릴스" if p.get("media_product_type") == "REELS" else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "")
-            text = f"**{i}위** · {ts} · {fmt} · 참여 {engage:,} (❤️{ins.get('likes',0) or 0} 💬{ins.get('comments',0) or 0} 📌{ins.get('saved',0) or 0}) · {cap}{'...' if len(p.get('caption','')or'') > 60 else ''}"
-            if link:
-                text += f" [↗]({link})"
-            st.markdown(text)
+        if len(ranked) >= 3:
+            st.markdown("###### TOP 3")
+            for i, p in enumerate(ranked[:3], 1):
+                st.markdown(f"**{i}.** {_rank_row(p)}")
 
-    st.divider()
+            st.markdown("###### WORST 3")
+            for i, p in enumerate(reversed(ranked[-3:]), 1):
+                st.markdown(f"**{i}.** {_rank_row(p)}")
 
-    # ── 정렬 ──
+    # ── 게시물 목록 ──
+    st.markdown("---")
+    st.markdown("##### 게시물 목록")
+
     sort_options = {
         "최신순": None,
-        "❤️ 좋아요 많은 순": "likes",
-        "💬 댓글 많은 순": "comments",
-        "📌 저장 많은 순": "saved",
-        "🔄 공유 많은 순": "shares",
-        "👁️ 조회 많은 순": "views",
-        "📣 도달 많은 순": "reach",
+        "좋아요 많은 순": "likes",
+        "댓글 많은 순": "comments",
+        "저장 많은 순": "saved",
+        "공유 많은 순": "shares",
+        "조회 많은 순": "views",
+        "도달 많은 순": "reach",
     }
-    sort_choice = st.selectbox("정렬", list(sort_options.keys()), index=0, key="insights_sort")
+    sort_choice = st.selectbox("정렬", list(sort_options.keys()), index=0, key="insights_sort", label_visibility="collapsed")
     sort_key = sort_options[sort_choice]
     if sort_key:
         posts = sorted(posts, key=lambda p: p.get("insights", {}).get(sort_key, 0) or 0, reverse=True)
-
-    # ── 게시물 카드 그리드 ──
-    type_label = {"IMAGE": "📷 이미지", "VIDEO": "🎬 동영상", "CAROUSEL_ALBUM": "📑 캐러셀"}
 
     for row_start in range(0, len(posts), 3):
         row_posts = posts[row_start:row_start + 3]
         cols = st.columns(3)
         for col, post in zip(cols, row_posts):
             with col:
-                # 릴스/동영상은 thumbnail_url 우선, 이미지는 media_url 우선
                 is_video = post.get("media_type") == "VIDEO"
                 is_reels = post.get("media_product_type") == "REELS"
 
@@ -598,35 +579,37 @@ def render_insights_page(account):
                         if thumb:
                             st.image(thumb, use_container_width=True)
                         else:
-                            st.info("🎬 영상 로드 불가")
+                            st.caption("영상을 불러올 수 없습니다")
                 else:
                     media_url = post.get("media_url") or post.get("thumbnail_url")
                     if media_url:
                         try:
                             st.image(media_url, use_container_width=True)
                         except Exception:
-                            st.info("🖼️ 이미지 로드 불가")
+                            st.caption("이미지를 불러올 수 없습니다")
                     else:
-                        st.info("🖼️ 썸네일 없음")
+                        st.caption("썸네일 없음")
 
                 ts = post.get("timestamp", "")[:10]
-                if is_reels:
-                    mtype = "🎬 릴스"
-                else:
-                    mtype = type_label.get(post.get("media_type", ""), "기타")
-                st.caption(f"{ts} · {mtype}")
+                fmt = _fmt_type(post)
+                st.caption(f"{ts} · {fmt}")
 
-                ins = {k: v for k, v in post.get("insights", {}).items()
-                       if k != "_errors"}
+                ins = {k: v for k, v in post.get("insights", {}).items() if k != "_errors"}
                 likes = ins.get("likes", "–")
                 comments = ins.get("comments", "–")
                 saves = ins.get("saved", "–")
-                shares = ins.get("shares", "–")
                 views = ins.get("views", "–")
                 reach = ins.get("reach", "–")
 
-                st.markdown(f"❤️ **{likes}**  💬 **{comments}**  📌 **{saves}**  🔄 **{shares}**")
-                st.caption(f"👁️ 조회 {views:,}  ·  📣 도달 {reach:,}" if isinstance(views, int) else f"👁️ 조회 {views}  ·  📣 도달 {reach}")
+                st.markdown(
+                    f"<span style='font-size:13px'>"
+                    f"좋아요 **{likes}** · 댓글 **{comments}** · 저장 **{saves}**"
+                    f"</span>", unsafe_allow_html=True,
+                )
+                if isinstance(views, int):
+                    st.caption(f"조회 {views:,} · 도달 {reach:,}")
+                else:
+                    st.caption(f"조회 {views} · 도달 {reach}")
 
                 caption = post.get("caption") or ""
                 if caption:
@@ -634,17 +617,15 @@ def render_insights_page(account):
 
                 permalink = post.get("permalink", "")
                 if permalink:
-                    st.markdown(f"[Instagram에서 보기]({permalink})")
+                    st.markdown(f"<a href='{permalink}' target='_blank' style='font-size:12px'>Instagram에서 보기</a>", unsafe_allow_html=True)
 
-    # ── CSV 다운로드 ──
-
+    # ── 하단 CSV ──
     rows = []
     for post in posts:
         ins = {k: v for k, v in post.get("insights", {}).items() if k != "_errors"}
-        is_reels = post.get("media_product_type") == "REELS"
         rows.append({
             "날짜": post.get("timestamp", "")[:10],
-            "타입": "릴스" if is_reels else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(post.get("media_type", ""), "기타"),
+            "타입": _fmt_type(post),
             "좋아요": ins.get("likes", ""),
             "댓글": ins.get("comments", ""),
             "저장": ins.get("saved", ""),

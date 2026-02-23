@@ -376,17 +376,23 @@ def render_insights_page(account):
             media_data = ig.get_media_list(limit=50)
             all_posts = media_data.get("data", [])
 
-        # 팔로워 데이터 수집
-        follower_data = {}
-        try:
-            with st.spinner("팔로워 분석 중..."):
+        # 팔로워 데이터 수집 (각 호출 독립 처리)
+        follower_data = {"_errors": []}
+        with st.spinner("팔로워 분석 중..."):
+            try:
                 follower_data["account"] = ig.get_account_info()
+            except Exception as e:
+                follower_data["_errors"].append(f"계정 정보: {e}")
+            try:
                 follower_data["demographics"] = ig.get_follower_demographics()
+            except Exception as e:
+                follower_data["_errors"].append(f"인구통계: {e}")
+            try:
                 since_ts = int(datetime.combine(date_from, datetime.min.time()).timestamp())
                 until_ts = int(datetime.combine(date_to, datetime.max.time()).timestamp())
                 follower_data["daily"] = ig.get_daily_follower_metrics(since=since_ts, until=until_ts)
-        except Exception as e:
-            follower_data["_error"] = str(e)
+            except Exception as e:
+                follower_data["_errors"].append(f"일별 지표: {e}")
         st.session_state.follower_data = follower_data
 
         posts = []
@@ -454,7 +460,13 @@ def render_insights_page(account):
     demo = fd.get("demographics", {})
     daily_raw = fd.get("daily", {})
 
-    if acct and "_error" not in fd:
+    fd_errors = fd.get("_errors", [])
+    if fd_errors:
+        with st.expander("팔로워 분석 중 일부 오류 발생"):
+            for err in fd_errors:
+                st.code(err)
+
+    if acct:
         st.markdown("##### 팔로워 분석")
 
         # 기본 지표

@@ -6,6 +6,9 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [10, 30, 60]  # 재시도 간 대기(초): 10s → 30s → 60s
+
 
 class InstagramClient:
     def __init__(self):
@@ -28,6 +31,35 @@ class InstagramClient:
             except (ValueError, KeyError):
                 resp.raise_for_status()
 
+    @staticmethod
+    def _is_retryable(error):
+        """재시도 가능한 에러인지 판단합니다."""
+        err_str = str(error)
+        # Instagram 서버 타임아웃 (code=-2), rate limit, 서버 에러
+        return any(keyword in err_str for keyword in [
+            "Timeout", "code=-2", "code=2", "code=4",
+            "temporarily unavailable", "try again",
+            "500", "502", "503",
+        ])
+
+    def _post_with_retry(self, url, params):
+        """POST 요청을 재시도 로직과 함께 실행합니다."""
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = requests.post(url, data=params)
+                self._check_response(resp)
+                return resp.json()
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1 and self._is_retryable(e):
+                    delay = RETRY_DELAYS[attempt]
+                    logger.warning(f"  재시도 {attempt + 1}/{MAX_RETRIES} ({delay}초 대기): {e}")
+                    time.sleep(delay)
+                else:
+                    raise
+        raise last_error
+
     def _create_child_container(self, image_url):
         """Step 1: 개별 캐러셀 아이템 컨테이너를 생성합니다."""
         url = f"{self.base_url}/{self.user_id}/media"
@@ -36,9 +68,8 @@ class InstagramClient:
             "is_carousel_item": "true",
             "access_token": self.access_token,
         }
-        resp = requests.post(url, data=params)
-        self._check_response(resp)
-        container_id = resp.json()["id"]
+        data = self._post_with_retry(url, params)
+        container_id = data["id"]
         logger.info(f"  child container 생성: {container_id}")
         return container_id
 
@@ -79,9 +110,8 @@ class InstagramClient:
                 ts = int(scheduled_time)
             params["scheduled_publish_time"] = ts
 
-        resp = requests.post(url, data=params)
-        self._check_response(resp)
-        carousel_id = resp.json()["id"]
+        data = self._post_with_retry(url, params)
+        carousel_id = data["id"]
         logger.info(f"  carousel container 생성: {carousel_id}")
         return carousel_id
 
@@ -92,9 +122,8 @@ class InstagramClient:
             "creation_id": carousel_container_id,
             "access_token": self.access_token,
         }
-        resp = requests.post(url, data=params)
-        self._check_response(resp)
-        media_id = resp.json()["id"]
+        data = self._post_with_retry(url, params)
+        media_id = data["id"]
         logger.info(f"  발행 완료! media_id: {media_id}")
         return media_id
 
@@ -114,9 +143,8 @@ class InstagramClient:
                 ts = int(scheduled_time)
             params["scheduled_publish_time"] = ts
 
-        resp = requests.post(url, data=params)
-        self._check_response(resp)
-        container_id = resp.json()["id"]
+        data = self._post_with_retry(url, params)
+        container_id = data["id"]
         logger.info(f"  single container 생성: {container_id}")
 
         self._wait_for_container(container_id)
@@ -129,16 +157,7 @@ class InstagramClient:
         return {"status": "published", "media_id": media_id}
 
     def publish_carousel(self, image_urls, caption, scheduled_time=None):
-        """Figma 이미지 URL들을 Instagram 캐러셀로 발행합니다.
-
-        Args:
-            image_urls: 공개 이미지 URL 리스트 (2~10장)
-            caption: 게시물 캡션
-            scheduled_time: 예약 시간 (datetime 또는 Unix timestamp, 선택)
-
-        Returns:
-            dict: {"status": "published"|"scheduled", "media_id"|"container_id": ...}
-        """
+        """Figma 이미지 URL들을 Instagram 캐러셀로 발행합니다."""
         if len(image_urls) < 2:
             raise ValueError("캐러셀은 최소 2장의 이미지가 필요합니다")
         if len(image_urls) > 10:
@@ -151,7 +170,7 @@ class InstagramClient:
             cid = self._create_child_container(img_url)
             self._wait_for_container(cid)
             child_ids.append(cid)
-            time.sleep(1)
+            time.sleep(2)
 
         # Step 2: carousel container 생성
         logger.info("  carousel container 생성 중...")

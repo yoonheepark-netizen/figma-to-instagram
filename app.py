@@ -651,7 +651,7 @@ if st.session_state.get("all_selected"):
                 # 2번째 게시물부터 Instagram rate limit 방지를 위해 대기
                 if idx > 0:
                     import time as _time
-                    for sec in range(5, 0, -1):
+                    for sec in range(10, 0, -1):
                         st.caption(f"⏳ 다음 게시물까지 {sec}초 대기 (rate limit 방지)...")
                         _time.sleep(1)
 

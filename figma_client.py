@@ -58,6 +58,38 @@ class FigmaClient:
             logger.warning(f"export 실패한 노드: {failed}")
         return all_images
 
+    def extract_texts(self, node_ids=None, file_key=None):
+        """지정된 노드(프레임)에 포함된 모든 TEXT 노드의 문자열을 추출합니다.
+        Returns: {node_id: [text1, text2, ...]}
+        """
+        file_key = file_key or Config.FIGMA_FILE_KEY
+        node_ids = node_ids or Config.FIGMA_NODE_IDS
+        ids_str = ",".join(node_ids)
+        url = f"{self.base_url}/files/{file_key}/nodes"
+        params = {"ids": ids_str}
+        resp = requests.get(url, headers=self.headers, params=params)
+        resp.raise_for_status()
+        nodes = resp.json().get("nodes", {})
+
+        result = {}
+        for nid, node_data in nodes.items():
+            texts = []
+            doc = node_data.get("document")
+            if doc:
+                self._collect_texts(doc, texts)
+            result[nid] = texts
+        return result
+
+    @staticmethod
+    def _collect_texts(node, texts):
+        """재귀적으로 TEXT 노드의 characters를 수집합니다."""
+        if node.get("type") == "TEXT":
+            chars = node.get("characters", "").strip()
+            if chars:
+                texts.append(chars)
+        for child in node.get("children", []):
+            FigmaClient._collect_texts(child, texts)
+
     def download_images(self, image_urls, output_dir="downloads"):
         """export된 임시 URL에서 로컬로 다운로드합니다. 파일 경로 리스트를 반환합니다."""
         os.makedirs(output_dir, exist_ok=True)

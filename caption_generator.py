@@ -154,18 +154,86 @@ _BODY_TEMPLATES = [
 ]
 
 
+def _build_from_image_texts(image_texts, top_hashtags=None, tone="정보성"):
+    """이미지에서 추출한 텍스트를 수壽 캡션 포맷으로 변환합니다."""
+    # 텍스트 정리: 빈 문자열 제거, 중복 제거, 순서 유지
+    seen = set()
+    cleaned = []
+    for t in image_texts:
+        t = t.strip()
+        if t and t not in seen:
+            seen.add(t)
+            cleaned.append(t)
+
+    if not cleaned:
+        return None
+
+    # 첫 번째 텍스트를 헤드라인으로 사용
+    hook = cleaned[0]
+
+    # 나머지를 본문으로 구성 (수壽 스타일: 짧은 줄 + 줄바꿈)
+    body_lines = cleaned[1:]
+
+    # 본문 포맷팅: 긴 텍스트는 줄바꿈 삽입, 짧은 텍스트는 단락 구분
+    body_parts = []
+    for line in body_lines:
+        # 이미 줄바꿈이 있으면 그대로
+        if "\n" in line:
+            body_parts.append(line)
+        # 40자 이상이면 적절히 줄바꿈
+        elif len(line) > 40:
+            mid = len(line) // 2
+            # 가장 가까운 공백이나 쉼표에서 줄바꿈
+            split_pos = line.rfind(" ", 0, mid + 10)
+            if split_pos == -1:
+                split_pos = line.rfind(",", 0, mid + 10)
+            if split_pos > 0:
+                body_parts.append(line[:split_pos + 1].rstrip() + "\n" + line[split_pos + 1:].lstrip())
+            else:
+                body_parts.append(line)
+        else:
+            body_parts.append(line)
+
+    body = "\n\n".join(body_parts) if body_parts else ""
+
+    # CTA
+    cta = random.choice(_CTAS)
+
+    # 조합
+    if body:
+        caption = f"{hook}\n\n{body} \n\n{cta} \n\n{_SIGNATURE}"
+    else:
+        caption = f"{hook} \n\n{cta} \n\n{_SIGNATURE}"
+
+    # 해시태그
+    tags = list(_BRAND_HASHTAGS)
+    if top_hashtags:
+        for t in top_hashtags:
+            tag = t.lstrip("#")
+            if tag not in tags and len(tags) < 5:
+                tags.append(tag)
+    for t in _EXTRA_HASHTAGS:
+        if t not in tags and len(tags) < 5:
+            tags.append(t)
+    hashtags = " ".join(f"#{t}" for t in tags)
+
+    full = f"{caption}\n\n{hashtags}"
+    return {"caption": caption, "hashtags": hashtags, "full": full}
+
+
 def generate_caption(
-    image_urls=None,
+    image_texts=None,
     account_name="",
     past_top_captions=None,
     top_keywords=None,
     top_hashtags=None,
     tone="정보성",
+    **kwargs,
 ):
     """수壽 계정 스타일에 맞는 Instagram 캡션과 해시태그를 생성합니다.
 
     Args:
-        image_urls: (미사용, 호환성 유지)
+        image_texts: 이미지에서 추출한 텍스트 리스트
         account_name: 계정 이름
         past_top_captions: 과거 성과 좋은 캡션 리스트
         top_keywords: 성과 좋은 키워드 리스트
@@ -175,7 +243,13 @@ def generate_caption(
     Returns:
         dict: {"caption": str, "hashtags": str, "full": str}
     """
-    # 키워드 준비
+    # 이미지 텍스트가 있으면 직접 활용하여 캡션 구성
+    if image_texts:
+        result = _build_from_image_texts(image_texts, top_hashtags, tone)
+        if result:
+            return result
+
+    # 키워드 준비 (이미지 텍스트 없거나 실패 시 템플릿 모드)
     keywords = list(top_keywords) if top_keywords else []
     if not keywords:
         keywords = ["공진단", "경옥고", "한약", "면역력", "활력"]

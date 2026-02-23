@@ -2440,15 +2440,19 @@ if st.session_state.get("all_selected"):
                 ai_clicked = st.button("✨ AI 캡션 생성", key=f"ai_caption_{grp}", use_container_width=True)
 
             if ai_clicked:
-                with st.spinner("AI가 캡션을 생성하고 있습니다..."):
+                with st.spinner("캡션을 생성하고 있습니다..."):
                     try:
-                        # 이미지 URL 수집
-                        img_urls = []
                         grp_info = all_selected[grp]
-                        if grp_info["source"] == "figma" and st.session_state.get(f"preview_{grp}"):
-                            img_urls = st.session_state[f"preview_{grp}"][:3]
-                        elif grp_info["source"] == "url":
-                            img_urls = grp_info["urls"][:3]
+
+                        # Figma 이미지에서 텍스트 추출
+                        image_texts = []
+                        if grp_info["source"] == "figma" and grp_info.get("node_ids"):
+                            try:
+                                text_map = figma.extract_texts(grp_info["node_ids"])
+                                for nid in grp_info["node_ids"]:
+                                    image_texts.extend(text_map.get(nid, []))
+                            except Exception:
+                                pass
 
                         # 인사이트 데이터에서 키워드/해시태그/캡션 추출
                         top_kw, top_ht, top_caps = [], [], []
@@ -2465,7 +2469,6 @@ if st.session_state.get("all_selected"):
                                 for _, p in scored[:5]
                                 if p.get("caption")
                             ]
-                            # 키워드 추출
                             kw_counter = Counter()
                             ht_counter = Counter()
                             for _, p in scored[:15]:
@@ -2481,7 +2484,7 @@ if st.session_state.get("all_selected"):
                             top_ht = [t for t, _ in ht_counter.most_common(10)]
 
                         result = generate_caption(
-                            image_urls=img_urls or None,
+                            image_texts=image_texts or None,
                             account_name=grp_account,
                             past_top_captions=top_caps or None,
                             top_keywords=top_kw or None,

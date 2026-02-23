@@ -818,6 +818,213 @@ def render_insights_page(account):
             else:
                 st.caption("캡션 데이터가 부족하여 관심사를 분류할 수 없습니다.")
 
+    # ── 릴스 성과 심층 분석 ──
+    reels_posts = [p for p in posts if p.get("media_product_type") == "REELS"]
+    non_reels = [p for p in posts if p.get("media_product_type") != "REELS"]
+
+    if has_insights and len(reels_posts) >= 2:
+        st.markdown("---")
+        st.markdown("##### 릴스 성과 분석")
+        st.caption(f"전체 {len(posts)}개 게시물 중 릴스 {len(reels_posts)}개")
+
+        # 릴스 vs 기타 포맷 비교
+        def _avg_metric(group, key):
+            vals = [p.get("insights", {}).get(key, 0) or 0 for p in group]
+            return round(sum(vals) / max(len(vals), 1), 1)
+
+        if non_reels:
+            cmp_cols = st.columns(6)
+            cmp_labels = [("조회", "views"), ("도달", "reach"), ("좋아요", "likes"), ("댓글", "comments"), ("저장", "saved"), ("공유", "shares")]
+            for col, (label, key) in zip(cmp_cols, cmp_labels):
+                r_val = _avg_metric(reels_posts, key)
+                o_val = _avg_metric(non_reels, key)
+                diff = round(r_val - o_val)
+                diff_str = f"+{diff:,}" if diff > 0 else f"{diff:,}"
+                col.metric(f"릴스 평균 {label}", f"{r_val:,.0f}", diff_str, help=f"기타 포맷 평균: {o_val:,.0f}")
+
+        reels_tab1, reels_tab2, reels_tab3 = st.tabs(["참여율 분석", "캡션 패턴", "릴스 인사이트"])
+
+        with reels_tab1:
+            # 릴스별 조회수 대비 참여율
+            reels_data = []
+            for p in reels_posts:
+                ins = p.get("insights", {})
+                views = ins.get("views", 0) or 0
+                likes = ins.get("likes", 0) or 0
+                comments = ins.get("comments", 0) or 0
+                saved = ins.get("saved", 0) or 0
+                shares = ins.get("shares", 0) or 0
+                eng = likes + comments + saved + shares
+                eng_rate = round(eng / max(views, 1) * 100, 2)
+                cap = (p.get("caption") or "")[:40]
+                ts = p.get("timestamp", "")[:10]
+                reels_data.append({
+                    "날짜": ts, "캡션": cap + ("..." if len(p.get("caption", "") or "") > 40 else ""),
+                    "조회": views, "참여": eng, "참여율": eng_rate,
+                    "좋아요": likes, "댓글": comments, "저장": saved, "공유": shares,
+                })
+            reels_df = pd.DataFrame(reels_data).sort_values("참여율", ascending=False)
+
+            avg_eng_rate = reels_df["참여율"].mean()
+            st.markdown(_card.format(content=(
+                f'<div style="display:flex;gap:24px;align-items:center">'
+                f'<div><p style="font-size:12px;color:#6b7280;margin:0">릴스 평균 참여율</p>'
+                f'<p style="font-size:28px;font-weight:700;color:#6366f1;margin:4px 0 0">{avg_eng_rate:.2f}%</p></div>'
+                f'<div style="flex:1;font-size:12px;color:#6b7280">'
+                f'참여율 = (좋아요+댓글+저장+공유) / 조회수 × 100<br>'
+                f'높을수록 콘텐츠가 시청자의 행동을 이끌어낸다는 뜻입니다.</div>'
+                f'</div>'
+            )), unsafe_allow_html=True)
+
+            st.dataframe(
+                reels_df[["날짜", "캡션", "조회", "참여", "참여율"]],
+                use_container_width=True, hide_index=True,
+                column_config={"참여율": st.column_config.NumberColumn(format="%.2f%%")},
+            )
+
+        with reels_tab2:
+            # 캡션 길이 vs 참여율
+            cap_groups = {"짧은 (~50자)": [], "보통 (50~150자)": [], "긴 (150자~)": []}
+            for p in reels_posts:
+                cap_len = len(p.get("caption") or "")
+                ins = p.get("insights", {})
+                views = ins.get("views", 0) or 1
+                eng = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0) + (ins.get("shares", 0) or 0)
+                rate = eng / max(views, 1) * 100
+                if cap_len <= 50:
+                    cap_groups["짧은 (~50자)"].append(rate)
+                elif cap_len <= 150:
+                    cap_groups["보통 (50~150자)"].append(rate)
+                else:
+                    cap_groups["긴 (150자~)"].append(rate)
+
+            cap_html = ""
+            for label, rates in cap_groups.items():
+                if rates:
+                    avg = round(sum(rates) / len(rates), 2)
+                    cap_html += (
+                        f'<div style="background:#f8f9fa;border-radius:8px;padding:12px 16px;margin-bottom:8px;'
+                        f'display:flex;justify-content:space-between;align-items:center">'
+                        f'<span style="font-size:13px;font-weight:500">{label}</span>'
+                        f'<div style="text-align:right">'
+                        f'<span style="font-size:15px;font-weight:700;color:#6366f1">{avg:.2f}%</span>'
+                        f'<span style="font-size:11px;color:#9ca3af;margin-left:8px">({len(rates)}개)</span>'
+                        f'</div></div>'
+                    )
+            if cap_html:
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:13px;font-weight:600;margin:0 0 10px">캡션 길이별 릴스 참여율</p>'
+                    f'{cap_html}'
+                )), unsafe_allow_html=True)
+
+            # 해시태그 유무 비교
+            with_ht = [p for p in reels_posts if "#" in (p.get("caption") or "")]
+            without_ht = [p for p in reels_posts if "#" not in (p.get("caption") or "")]
+            if with_ht and without_ht:
+                def _avg_eng_rate(group):
+                    rates = []
+                    for p in group:
+                        ins = p.get("insights", {})
+                        v = ins.get("views", 0) or 1
+                        e = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0) + (ins.get("shares", 0) or 0)
+                        rates.append(e / max(v, 1) * 100)
+                    return round(sum(rates) / len(rates), 2)
+
+                ht_rate = _avg_eng_rate(with_ht)
+                no_ht_rate = _avg_eng_rate(without_ht)
+                ht_c1, ht_c2 = st.columns(2)
+                ht_c1.metric("해시태그 있는 릴스", f"{ht_rate:.2f}%", f"{len(with_ht)}개")
+                ht_c2.metric("해시태그 없는 릴스", f"{no_ht_rate:.2f}%", f"{len(without_ht)}개")
+
+            # CTA / 질문 유무 비교
+            with_cta = [p for p in reels_posts if any(w in (p.get("caption") or "") for w in ["링크", "확인", "클릭", "바로가기", "구매", "신청", "DM", "댓글"])]
+            with_q = [p for p in reels_posts if "?" in (p.get("caption") or "")]
+            cta_items = []
+            if with_cta and len(with_cta) < len(reels_posts):
+                others = [p for p in reels_posts if p not in with_cta]
+                def _group_views_rate(grp):
+                    rates = []
+                    for p in grp:
+                        ins = p.get("insights", {})
+                        v = ins.get("views", 0) or 1
+                        e = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+                        rates.append(e / max(v, 1) * 100)
+                    return round(sum(rates) / len(rates), 2) if rates else 0
+                cta_items.append(f"CTA 포함 릴스 참여율 **{_group_views_rate(with_cta):.2f}%** vs 미포함 **{_group_views_rate(others):.2f}%** ({len(with_cta)}개 / {len(others)}개)")
+            if with_q and len(with_q) < len(reels_posts):
+                others_q = [p for p in reels_posts if p not in with_q]
+                cta_items.append(f"질문형 릴스 참여율 **{_group_views_rate(with_q):.2f}%** vs 일반 **{_group_views_rate(others_q):.2f}%** ({len(with_q)}개 / {len(others_q)}개)")
+            if cta_items:
+                items_html = "".join(f'<li style="margin-bottom:6px;font-size:13px">{it}</li>' for it in cta_items)
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:13px;font-weight:600;margin:0 0 8px">캡션 전략별 참여율</p>'
+                    f'<ul style="padding-left:18px;margin:0">{items_html}</ul>'
+                )), unsafe_allow_html=True)
+
+        with reels_tab3:
+            # 릴스 종합 인사이트
+            insights_list = []
+
+            # 1. 릴스 비중
+            reels_pct = round(len(reels_posts) / max(len(posts), 1) * 100)
+            insights_list.append(f"릴스 비중 **{reels_pct}%** ({len(reels_posts)}/{len(posts)})")
+            if reels_pct < 30:
+                insights_list.append("릴스 비중이 낮습니다. 인스타그램 알고리즘이 릴스 도달을 우선 배분하고 있으므로 비중을 높여보세요.")
+            elif reels_pct > 70:
+                insights_list.append("릴스 중심 계정입니다. 간간이 캐러셀이나 이미지로 변주를 줘서 피로도를 관리하세요.")
+
+            # 2. 조회수 vs 다른 포맷
+            if non_reels:
+                r_reach = _avg_metric(reels_posts, "reach")
+                o_reach = _avg_metric(non_reels, "reach")
+                if r_reach > o_reach * 1.3:
+                    insights_list.append(f"릴스 평균 도달({r_reach:,.0f})이 다른 포맷({o_reach:,.0f})보다 **{round(r_reach/max(o_reach,1)*100-100)}% 높습니다** → 릴스가 확산에 효과적")
+                elif r_reach < o_reach * 0.7:
+                    insights_list.append(f"릴스 평균 도달({r_reach:,.0f})이 다른 포맷({o_reach:,.0f})보다 낮습니다 → 릴스 썸네일과 첫 3초 후킹을 개선해보세요")
+
+            # 3. 참여율 TOP 릴스 패턴
+            if reels_data:
+                sorted_reels = sorted(reels_data, key=lambda x: x["참여율"], reverse=True)
+                if len(sorted_reels) >= 2:
+                    best = sorted_reels[0]
+                    insights_list.append(f"가장 높은 참여율 릴스: **{best['참여율']:.2f}%** ({best['날짜']}) — \"{best['캡션']}\"")
+
+            # 4. 최적 게시 요일
+            day_names_kr = ["월", "화", "수", "목", "금", "토", "일"]
+            day_views = defaultdict(list)
+            for p in reels_posts:
+                ts = p.get("timestamp", "")[:10]
+                if ts:
+                    try:
+                        wd = datetime.strptime(ts, "%Y-%m-%d").weekday()
+                        day_views[day_names_kr[wd]].append(p.get("insights", {}).get("views", 0) or 0)
+                    except ValueError:
+                        pass
+            if day_views:
+                best_day = max(day_views.items(), key=lambda x: sum(x[1]) / len(x[1]))
+                insights_list.append(f"릴스 평균 조회 최고 요일: **{best_day[0]}요일** (평균 {sum(best_day[1])//len(best_day[1]):,}회)")
+
+            # 5. 릴스 제작 제안
+            insights_list.append("")
+            insights_list.append("**릴스 최적화 팁**")
+            insights_list.append("첫 1~3초 후킹이 핵심 — 텍스트 오버레이나 임팩트 있는 장면으로 시작하세요")
+            insights_list.append("7~15초 릴스가 완주율이 높아 알고리즘에 유리합니다")
+            insights_list.append("트렌드 오디오를 활용하면 탐색 탭 노출 확률이 높아집니다")
+            insights_list.append("마지막에 CTA(저장/공유/팔로우 유도)를 넣으면 참여율이 올라갑니다")
+
+            items_html = ""
+            for it in insights_list:
+                if it == "":
+                    items_html += '<div style="height:8px"></div>'
+                elif it.startswith("**"):
+                    items_html += f'<p style="font-size:13px;font-weight:700;margin:8px 0 4px">{it.replace("**","")}</p>'
+                else:
+                    items_html += f'<li style="margin-bottom:6px;font-size:13px">{it}</li>'
+            st.markdown(_card_accent.format(bg="#faf5ff", border="#d8b4fe", content=(
+                f'<p style="font-size:13px;font-weight:600;color:#7c3aed;margin:0 0 8px">릴스 종합 인사이트</p>'
+                f'<ul style="padding-left:18px;margin:0">{items_html}</ul>'
+            )), unsafe_allow_html=True)
+
     st.markdown("---")
 
     # ── 요약 지표 ──

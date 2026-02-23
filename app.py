@@ -31,6 +31,47 @@ from token_manager import TokenManager
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
 
+# ── 글로벌 CSS ──
+CUSTOM_CSS = """
+<style>
+/* metric 카드 */
+[data-testid="stMetric"] {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+[data-testid="stMetric"] label { font-size: 13px; color: #6c757d; }
+[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 22px; font-weight: 700; }
+
+/* 게시물 카드 */
+div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {
+    border-radius: 8px;
+}
+
+/* 탭 텍스트 */
+button[data-baseweb="tab"] { font-size: 14px !important; }
+
+/* dataframe */
+[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+
+/* caption 통일 */
+[data-testid="stCaptionContainer"] { font-size: 13px !important; }
+
+/* 버튼 간격 */
+.stButton > button { border-radius: 6px; }
+
+/* expander 헤더 */
+[data-testid="stExpander"] summary { font-size: 14px; font-weight: 600; }
+
+/* divider 여백 줄이기 */
+[data-testid="stHorizontalBlock"] { gap: 0.5rem; }
+
+/* info box 통일 */
+[data-testid="stAlert"] { border-radius: 8px; font-size: 13px; }
+</style>
+"""
+
 
 # ── 계정 관리 ──────────────────────────────────────────────
 
@@ -726,11 +767,7 @@ def render_insights_page(account):
                 views = ins.get("views", "–")
                 reach = ins.get("reach", "–")
 
-                st.markdown(
-                    f"<span style='font-size:13px'>"
-                    f"좋아요 **{likes}** · 댓글 **{comments}** · 저장 **{saves}**"
-                    f"</span>", unsafe_allow_html=True,
-                )
+                st.caption(f"좋아요 {likes} · 댓글 {comments} · 저장 {saves}")
                 if isinstance(views, int):
                     st.caption(f"조회 {views:,} · 도달 {reach:,}")
                 else:
@@ -742,7 +779,7 @@ def render_insights_page(account):
 
                 permalink = post.get("permalink", "")
                 if permalink:
-                    st.markdown(f"<a href='{permalink}' target='_blank' style='font-size:12px'>Instagram에서 보기</a>", unsafe_allow_html=True)
+                    st.caption(f"[Instagram에서 보기]({permalink})")
 
     # ── 하단 CSV ──
     rows = []
@@ -763,28 +800,29 @@ def render_insights_page(account):
 
     df = pd.DataFrame(rows)
     csv = df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("📥 CSV 다운로드", csv, "instagram_insights.csv", "text/csv")
+    st.download_button("CSV 다운로드", csv, "instagram_insights.csv", "text/csv")
 
 
 # ── 페이지 설정 ───────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Instagram 게시물 올려줘!",
+    page_title="Instagram Publisher",
     page_icon="📸",
     layout="wide",
 )
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ── 사이드바: 계정 & 설정 ─────────────────────────────────
 
 with st.sidebar:
     page = st.radio(
         "메뉴",
-        ["📸 게시물 발행", "📊 콘텐츠 인사이트"],
+        ["게시물 발행", "콘텐츠 인사이트"],
         horizontal=True,
         label_visibility="collapsed",
     )
     st.divider()
-    st.header("설정")
+    st.markdown("##### 설정")
 
     accounts = load_accounts()
 
@@ -810,7 +848,7 @@ with st.sidebar:
                 pass
 
         # 토큰 갱신 버튼
-        if st.button("🔄 토큰 갱신 (60일 연장)", use_container_width=True):
+        if st.button("토큰 갱신 (60일 연장)", use_container_width=True):
             with st.spinner("토큰 갱신 중..."):
                 try:
                     result = TokenManager.refresh_long_lived_token(
@@ -847,19 +885,19 @@ with st.sidebar:
     # Slack 설정 표시
     slack_url = get_slack_webhook()
     if slack_url:
-        st.caption("🔔 Slack 알림: 연결됨")
+        st.caption("Slack 알림: 연결됨")
     else:
-        st.caption("🔕 Slack 알림: 미설정")
+        st.caption("Slack 알림: 미설정")
 
     st.divider()
 
     with st.expander("계정 관리"):
         # ── 토큰 발급 도우미 ──
-        st.subheader("🔑 토큰 발급 도우미")
+        st.markdown("**토큰 발급 도우미**")
         st.markdown(
             "**단기 토큰**만 입력하면 장기 토큰 + Instagram User ID를 자동 조회합니다."
         )
-        with st.popover("📖 단기 토큰 받는 법"):
+        with st.popover("단기 토큰 받는 법"):
             st.markdown(
                 "1. [Meta Graph API Explorer](https://developers.facebook.com/tools/explorer/) 접속\n"
                 "2. 오른쪽 상단 **Meta App** 선택\n"
@@ -879,7 +917,7 @@ with st.sidebar:
             help="Graph API Explorer에서 발급받은 단기 토큰 (~1시간 유효)",
         )
 
-        if st.button("🔍 자동 조회", use_container_width=True, disabled=not short_token):
+        if st.button("자동 조회", use_container_width=True, disabled=not short_token):
             with st.spinner("토큰 교환 + 계정 조회 중..."):
                 try:
                     # 1) 단기 → 장기 토큰 교환
@@ -929,7 +967,7 @@ with st.sidebar:
             for fa in found:
                 col_info, col_add = st.columns([3, 1])
                 with col_info:
-                    st.text(f"📄 {fa['page_name']}")
+                    st.text(fa['page_name'])
                     st.caption(f"IG ID: {fa['ig_user_id']}")
                 with col_add:
                     already = any(
@@ -952,7 +990,7 @@ with st.sidebar:
         st.divider()
 
         # ── 수동 계정 추가 ──
-        with st.popover("✏️ 수동으로 계정 추가"):
+        with st.popover("수동으로 계정 추가"):
             new_name = st.text_input(
                 "계정 이름",
                 key="new_name",
@@ -1011,15 +1049,14 @@ if not accounts:
     st.stop()
 
 # 페이지 라우팅
-if page == "📊 콘텐츠 인사이트":
-    st.title("📊 콘텐츠 인사이트")
+if page == "콘텐츠 인사이트":
     render_insights_page(selected_account)
     st.stop()
 
 
 # ── 메인: Step 1 - 콘텐츠 선택 ─────────────────────────────
 
-st.header("Step 1. 콘텐츠 선택")
+st.markdown("##### Step 1. 콘텐츠 선택")
 
 if "frames" not in st.session_state:
     st.session_state.frames = None
@@ -1038,7 +1075,7 @@ if "pencil_series" not in st.session_state:
     st.session_state.pencil_series = {}
 if "pencil_manifest" not in st.session_state:
     st.session_state.pencil_manifest = None
-tab_figma, tab_pencil, tab_upload, tab_url = st.tabs(["📐 Figma", "✏️ Pencil.dev", "📷 이미지 업로드", "🔗 URL 입력"])
+tab_figma, tab_pencil, tab_upload, tab_url = st.tabs(["Figma", "Pencil.dev", "이미지 업로드", "URL 입력"])
 
 figma_selected = {}  # Figma 탭에서 선택된 항목
 
@@ -1046,7 +1083,7 @@ figma_selected = {}  # Figma 탭에서 선택된 항목
 with tab_figma:
     col_load, col_info = st.columns([1, 3])
     with col_load:
-        if st.button("🔄 피그마 읽어오기", use_container_width=True):
+        if st.button("불러오기", use_container_width=True, key="load_figma"):
             with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
                 figma = FigmaClient()
                 all_frames = figma.get_file_frames(figma_file_key)
@@ -1077,11 +1114,11 @@ with tab_figma:
         )
 
         if selected_groups:
-            st.info(f"✅ {len(selected_groups)}개 이미지셋 선택됨")
+            st.info(f"{len(selected_groups)}개 이미지셋 선택됨")
 
             for grp in selected_groups:
                 group_frames = groups[grp]
-                with st.expander(f"📁 {grp} ({len(group_frames)}장)", expanded=True):
+                with st.expander(f"{grp} ({len(group_frames)}장)", expanded=True):
                     selected_frames = []
                     cols = st.columns(min(len(group_frames), 5))
                     for i, frame in enumerate(group_frames):
@@ -1101,7 +1138,7 @@ with tab_figma:
 with tab_pencil:
     col_load, col_info = st.columns([1, 3])
     with col_load:
-        if st.button("🔄 Pencil.dev 읽어오기", use_container_width=True):
+        if st.button("불러오기", use_container_width=True, key="load_pencil"):
             gist_id = pencil_gist_id.strip().rstrip("/").split("/")[-1] if pencil_gist_id.strip() else ""
             if not gist_id:
                 st.error("사이드바에서 Pencil Gist ID를 먼저 설정해주세요.")
@@ -1130,12 +1167,12 @@ with tab_pencil:
         )
 
         if selected_pencil:
-            st.info(f"✅ {len(selected_pencil)}개 이미지셋 선택됨")
+            st.info(f"{len(selected_pencil)}개 이미지셋 선택됨")
 
             for sname in selected_pencil:
                 sdata = next(s for s in series_list if s["name"] == sname)
                 images = sdata.get("images", [])
-                with st.expander(f"📁 {sname} ({len(images)}장)", expanded=True):
+                with st.expander(f"{sname} ({len(images)}장)", expanded=True):
                     selected_images = []
                     cols = st.columns(min(len(images), 5))
                     for i, img in enumerate(images):
@@ -1178,7 +1215,7 @@ with tab_upload:
             with preview_cols[i % 5]:
                 st.image(uf, caption=uf.name, use_container_width=True)
 
-        if st.button("➕ 시리즈 추가", key="add_upload_series"):
+        if st.button("시리즈 추가", key="add_upload_series"):
             name = upload_name.strip()
             if not name:
                 st.error("시리즈 이름을 입력해주세요.")
@@ -1194,17 +1231,17 @@ with tab_upload:
     # 추가된 업로드 시리즈 목록
     if st.session_state.upload_series:
         st.divider()
-        st.subheader("추가된 시리즈")
+        st.markdown("###### 추가된 시리즈")
         for sname, sfiles in list(st.session_state.upload_series.items()):
             col1, col2 = st.columns([4, 1])
             with col1:
-                st.write(f"📷 **{sname}** — {len(sfiles)}장")
+                st.write(f"**{sname}** — {len(sfiles)}장")
                 mini_cols = st.columns(min(len(sfiles), 5))
                 for i, f in enumerate(sfiles):
                     with mini_cols[i % 5]:
                         st.caption(f["name"])
             with col2:
-                if st.button("❌ 삭제", key=f"del_upload_{sname}"):
+                if st.button("삭제", key=f"del_upload_{sname}"):
                     del st.session_state.upload_series[sname]
                     st.rerun()
 
@@ -1237,7 +1274,7 @@ with tab_url:
                 except Exception:
                     st.caption(f"{i+1}. {url[:40]}...")
 
-        if st.button("➕ 시리즈 추가", key="add_url_series"):
+        if st.button("시리즈 추가", key="add_url_series"):
             name = url_name.strip()
             if not name:
                 st.error("시리즈 이름을 입력해주세요.")
@@ -1252,13 +1289,13 @@ with tab_url:
     # 추가된 URL 시리즈 목록
     if st.session_state.url_series:
         st.divider()
-        st.subheader("추가된 시리즈")
+        st.markdown("###### 추가된 시리즈")
         for sname, surls in list(st.session_state.url_series.items()):
             col1, col2 = st.columns([4, 1])
             with col1:
-                st.write(f"🔗 **{sname}** — {len(surls)}장")
+                st.write(f"**{sname}** — {len(surls)}장")
             with col2:
-                if st.button("❌ 삭제", key=f"del_url_{sname}"):
+                if st.button("삭제", key=f"del_url_{sname}"):
                     del st.session_state.url_series[sname]
                     st.rerun()
 
@@ -1271,15 +1308,15 @@ for grp, node_ids in figma_selected.items():
 
 # 업로드 항목
 for sname, sfiles in st.session_state.upload_series.items():
-    all_selected[f"📷 {sname}"] = {"source": "upload", "files": sfiles, "count": len(sfiles)}
+    all_selected[sname] = {"source": "upload", "files": sfiles, "count": len(sfiles)}
 
 # Pencil.dev 항목
 for sname, surls in st.session_state.pencil_series.items():
-    all_selected[f"✏️ {sname}"] = {"source": "url", "urls": surls, "count": len(surls)}
+    all_selected[sname] = {"source": "url", "urls": surls, "count": len(surls)}
 
 # URL 항목
 for sname, surls in st.session_state.url_series.items():
-    all_selected[f"🔗 {sname}"] = {"source": "url", "urls": surls, "count": len(surls)}
+    all_selected[sname] = {"source": "url", "urls": surls, "count": len(surls)}
 
 if all_selected:
     st.session_state.all_selected = all_selected
@@ -1291,8 +1328,8 @@ elif "all_selected" in st.session_state:
 if st.session_state.get("all_selected"):
     all_selected = st.session_state.all_selected
 
-    st.divider()
-    st.header("Step 2. 시리즈별 발행 설정")
+    st.markdown("---")
+    st.markdown("##### Step 2. 발행 설정")
 
     # 시리즈별 설정 저장
     group_settings = {}  # {grp: {"caption": ..., "mode": ..., "scheduled_time": ...}}
@@ -1300,12 +1337,12 @@ if st.session_state.get("all_selected"):
     account_names = [a["name"] for a in accounts]
 
     for grp, grp_info in all_selected.items():
-        with st.expander(f"📁 {grp} — {grp_info['count']}장", expanded=True):
+        with st.expander(f"{grp} — {grp_info['count']}장", expanded=True):
             # 소스별 미리보기
             preview_key = f"preview_{grp}"
 
             if grp_info["source"] == "figma":
-                if st.button("👁️ 미리보기", key=f"btn_preview_{grp}"):
+                if st.button("미리보기", key=f"btn_preview_{grp}"):
                     with st.spinner("Figma에서 이미지 가져오는 중..."):
                         figma = FigmaClient()
                         urls = figma.export_images(grp_info["node_ids"], fmt="png", scale=1)
@@ -1381,8 +1418,8 @@ if st.session_state.get("all_selected"):
 
     # ── Step 3: 발행 ──────────────────────────────────────
 
-    st.divider()
-    st.header("Step 3. 발행")
+    st.markdown("---")
+    st.markdown("##### Step 3. 발행")
 
     # 요약 테이블
     summary_data = []
@@ -1402,7 +1439,7 @@ if st.session_state.get("all_selected"):
         confirmed = st.checkbox("발행을 확인합니다")
     with col_publish:
         publish_clicked = st.button(
-            f"🚀 {len(all_selected)}개 시리즈 발행하기",
+            f"{len(all_selected)}개 시리즈 발행",
             type="primary",
             disabled=not confirmed,
             use_container_width=True,

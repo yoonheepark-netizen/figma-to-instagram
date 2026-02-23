@@ -2,7 +2,7 @@ import base64
 import json
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import requests as req
@@ -753,31 +753,162 @@ def render_insights_page(account):
                     f'<ul style="padding-left:18px;margin:0">{dont_items}</ul>'
                 )), unsafe_allow_html=True)
 
-            # 방향성 제안
-            directions = []
-            if top_a["top_fmt"] == "릴스":
-                directions.append("릴스가 높은 참여를 이끌어내고 있습니다. 숏폼 영상 비중을 늘리고, 트렌드 음원이나 빠른 편집을 활용해 보세요.")
-            elif top_a["top_fmt"] == "캐러셀":
-                directions.append("캐러셀이 가장 효과적입니다. 정보를 슬라이드로 나눠 전달하고, 마지막 장에 CTA를 배치하세요.")
-            elif top_a["top_fmt"] == "이미지":
-                directions.append("단일 이미지가 잘 먹히는 계정입니다. 비주얼 퀄리티에 집중하고, 한 장으로 시선을 끄는 썸네일을 만들어 보세요.")
+            # ── 콘텐츠 방향성 (확장) ──
+            st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+            st.markdown('<p style="font-size:14px;font-weight:700;margin-bottom:12px">콘텐츠 방향성</p>', unsafe_allow_html=True)
 
-            if top_a["avg_reach"] > 0:
-                reach_ratio = top_a["avg_reach"] / max(worst_a["avg_reach"], 1)
-                if reach_ratio >= 2:
-                    directions.append(f"상위 콘텐츠의 평균 도달({top_a['avg_reach']:,})이 하위({worst_a['avg_reach']:,})의 {reach_ratio:.1f}배입니다. 알고리즘 확산 패턴을 반복하세요.")
+            # 1. 캡션 키워드/테마 분석
+            stopwords = {"이", "그", "저", "것", "수", "등", "및", "더", "에", "의", "를", "을", "가", "은", "는",
+                         "으로", "로", "에서", "와", "과", "도", "만", "까지", "부터", "에게", "한테", "보다",
+                         "처럼", "같이", "위해", "대해", "통해", "따라", "대한", "있는", "없는", "하는", "되는",
+                         "합니다", "입니다", "있습니다", "됩니다", "하세요", "주세요", "있어요", "해요", "했어요",
+                         "하고", "하면", "않은", "않는", "우리", "오늘", "정말", "함께", "모든", "지금", "바로"}
+            top_captions = [p.get("caption", "") or "" for p in top_n]
+            all_top_text = " ".join(top_captions)
+            keywords = [w for w in re.findall(r"[가-힣]{2,}", all_top_text) if w not in stopwords]
+            keyword_counts = Counter(keywords).most_common(8)
+            top_hashtags = Counter(re.findall(r"#([가-힣a-zA-Z0-9_]+)", all_top_text)).most_common(5)
+
+            # 캡션 스타일 분석
+            n_top = len(top_n)
+            style_storytelling = sum(1 for c in top_captions if any(w in c for w in ["했어요", "했습니다", "이었", "되었", "경험", "후기", "느낌"]))
+            style_list = sum(1 for c in top_captions if any(c.count(ch) >= 3 for ch in ["✅", "✔", "·", "-", "①", "1.", "2."]))
+            style_emoji_heavy = sum(1 for c in top_captions if len(re.findall(r"[\U0001F300-\U0001FAFF]", c)) >= 5)
+
+            # 참여 유형 분석
+            top_saves = sum(p.get("insights", {}).get("saved", 0) or 0 for p in top_n) / max(n_top, 1)
+            top_shares = sum(p.get("insights", {}).get("shares", 0) or 0 for p in top_n) / max(n_top, 1)
+            top_comments = sum(p.get("insights", {}).get("comments", 0) or 0 for p in top_n) / max(n_top, 1)
+            top_likes = sum(p.get("insights", {}).get("likes", 0) or 0 for p in top_n) / max(n_top, 1)
+
+            # 1) 성과 키워드 태그
+            if keyword_counts:
+                tags_html = " ".join(
+                    f'<span style="display:inline-block;background:#e0e7ff;color:#3730a3;'
+                    f'border-radius:12px;padding:4px 12px;font-size:12px;font-weight:500;margin:3px 2px">'
+                    f'{w} ({c})</span>' for w, c in keyword_counts
+                )
+                if top_hashtags:
+                    tags_html += '<span style="display:inline-block;width:8px"></span>'
+                    tags_html += " ".join(
+                        f'<span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
+                        f'border-radius:12px;padding:4px 12px;font-size:12px;font-weight:500;margin:3px 2px">'
+                        f'#{t} ({c})</span>' for t, c in top_hashtags
+                    )
+                st.markdown(_card_accent.format(bg="#f5f3ff", border="#c4b5fd", content=(
+                    f'<p style="font-size:13px;font-weight:600;color:#5b21b6;margin:0 0 8px">성과 키워드</p>'
+                    f'<p style="font-size:12px;color:#6b7280;margin:0 0 8px">상위 콘텐츠 캡션에서 자주 등장하는 키워드와 해시태그</p>'
+                    f'<div>{tags_html}</div>'
+                )), unsafe_allow_html=True)
+
+            # 2) 포맷 & 구조 전략
+            fmt_strategy = []
+            if top_a["top_fmt"] == "릴스":
+                fmt_strategy.append("**릴스 중심 전략**: 15-30초 숏폼 영상이 핵심 포맷입니다.")
+                fmt_strategy.append("릴스 아이디어: 제품 사용법 타임랩스, Before/After 변화 과정, 트렌드 음원 활용 일상 브이로그, 빠른 팁 3가지")
+            elif top_a["top_fmt"] == "캐러셀":
+                fmt_strategy.append("**캐러셀 중심 전략**: 슬라이드형 정보 전달이 가장 효과적입니다.")
+                fmt_strategy.append("캐러셀 아이디어: 단계별 가이드 (5-7장), 비교표/체크리스트, 미니 카드뉴스, 스토리텔링형 후기")
+            elif top_a["top_fmt"] == "이미지":
+                fmt_strategy.append("**이미지 중심 전략**: 한 장의 임팩트가 중요합니다.")
+                fmt_strategy.append("이미지 아이디어: 감성 무드보드, 인용구/타이포 카드, 제품 플랫레이, 고퀄리티 디테일 샷")
+
+            if style_storytelling > n_top * 0.3:
+                fmt_strategy.append("스토리텔링형 캡션의 참여도가 높습니다. 경험담·후기·에피소드 형식을 유지하세요.")
+            if style_list > n_top * 0.3:
+                fmt_strategy.append("리스트형 캡션이 잘 먹힙니다. 정보를 넘버링하거나 체크 포인트로 정리하세요.")
+
+            if fmt_strategy:
+                fmt_items = "".join(f'<li style="margin-bottom:6px;font-size:13px">{s}</li>' for s in fmt_strategy)
+                st.markdown(_card_accent.format(bg="#eff6ff", border="#bfdbfe", content=(
+                    f'<p style="font-size:13px;font-weight:600;color:#1d4ed8;margin:0 0 8px">포맷 & 구조 전략</p>'
+                    f'<ul style="padding-left:18px;margin:0">{fmt_items}</ul>'
+                )), unsafe_allow_html=True)
+
+            # 3) 추천 콘텐츠 주제
+            ideas = []
+
+            # 키워드 기반 주제 제안
+            top_words = [w for w, _ in keyword_counts[:5]]
+            if len(top_words) >= 2:
+                ideas.append(f'키워드 **{"·".join(top_words[:3])}**이(가) 반복 등장 → 이 주제를 시리즈로 발전시켜 보세요 (예: "알아두면 좋은 {top_words[0]} 팁 시리즈")')
+
+            # 참여 유형 기반 제안
+            if top_saves > top_likes * 0.3:
+                ideas.append("**저장률이 높은 계정**입니다 → 정보성/교육형 콘텐츠 (체크리스트, 가이드, 꿀팁 모음)를 꾸준히 제작하세요")
+            if top_shares > top_likes * 0.15:
+                ideas.append("**공유가 많은 계정**입니다 → 공감형/밈형 콘텐츠, 친구 태그 유도 게시물을 늘려보세요")
+            if top_comments > top_likes * 0.1:
+                ideas.append("**댓글 참여가 활발**합니다 → 투표/선택형 질문, 의견 요청 게시물로 소통을 강화하세요")
+
+            # 포맷별 구체적 아이디어
+            if top_a["top_fmt"] == "릴스":
+                ideas.append("릴스 주제 제안: ① 하루 루틴 브이로그 ② 제품 리뷰 30초 요약 ③ 나만의 꿀팁 TOP 5 ④ 고객 후기 인터뷰")
+            elif top_a["top_fmt"] == "캐러셀":
+                ideas.append("캐러셀 주제 제안: ① 초보자를 위한 A to Z 가이드 ② 이번 달 추천 리스트 ③ FAQ 정리 ④ 전후 비교 사례")
+            else:
+                ideas.append("이미지 주제 제안: ① 비하인드 씬 공개 ② 고객 후기 카드 ③ 시즌 무드 비주얼 ④ 숫자/통계 인포그래픽")
 
             if top_a["question_pct"] > 30:
-                directions.append("질문형 캡션이 참여에 효과적입니다. 열린 질문을 꾸준히 활용해보세요.")
+                ideas.append("질문형 게시물 아이디어: \"여러분은 어떤 쪽인가요?\", \"이 중 하나만 고른다면?\", \"경험 있으신 분?\" 등 열린 질문 활용")
             if top_a["cta_pct"] > 40:
-                directions.append("CTA가 포함된 게시물의 성과가 좋습니다. 저장·공유 유도 등 구체적인 행동을 제안하세요.")
-            if not directions:
-                directions.append(f"**{top_a['top_fmt']}** 포맷 + **{top_a['avg_cap']}자 내외 캡션** + **{top_a['top_day']}요일 게시**를 기본 공식으로 삼고, 매주 실험적 콘텐츠 1개를 섞어보세요.")
+                ideas.append("CTA 활용 아이디어: \"저장해두고 나중에 꺼내보세요\", \"필요한 친구 태그하기\", \"링크는 프로필에서 확인\"")
 
-            dir_items = "".join(f'<li style="margin-bottom:6px;font-size:13px">{d}</li>' for d in directions)
-            st.markdown(_card_accent.format(bg="#eff6ff", border="#bfdbfe", content=(
-                f'<p style="font-size:14px;font-weight:700;color:#2563eb;margin:0 0 10px">콘텐츠 방향성</p>'
-                f'<ul style="padding-left:18px;margin:0">{dir_items}</ul>'
+            ideas_items = "".join(f'<li style="margin-bottom:8px;font-size:13px">{d}</li>' for d in ideas)
+            st.markdown(_card_accent.format(bg="#f0fdf4", border="#86efac", content=(
+                f'<p style="font-size:13px;font-weight:600;color:#15803d;margin:0 0 8px">추천 콘텐츠 주제</p>'
+                f'<ul style="padding-left:18px;margin:0">{ideas_items}</ul>'
+            )), unsafe_allow_html=True)
+
+            # 4) 트렌드 & 시즌 제안
+            now = datetime.now()
+            month = now.month
+            season_tips = {
+                1: ("새해/신년", "신년 목표 공유, 올해의 키워드, 작년 회고 콘텐츠, 겨울 감성 비주얼"),
+                2: ("발렌타인/봄 준비", "발렌타인 기획전, 봄맞이 준비 콘텐츠, 셀프케어 루틴, 겨울→봄 전환 무드"),
+                3: ("봄/새학기", "봄 시즌 제품 추천, 새학기·새출발 콘텐츠, 벚꽃 시즌 비주얼, 스프링 루틴"),
+                4: ("봄 본격", "야외 활동 콘텐츠, 봄 코디·뷰티 추천, 나들이 가이드, 지구의 날 캠페인"),
+                5: ("가정의 달", "어버이날·어린이날 기획, 가족 관련 콘텐츠, 초여름 준비, 감사 캠페인"),
+                6: ("여름 시작", "여름 준비 체크리스트, 자외선 관리, 여행 준비 가이드, 상반기 결산"),
+                7: ("한여름", "휴가 콘텐츠, 여름 아이템 추천, 시원한 비주얼, 워케이션 브이로그"),
+                8: ("여름 마무리", "여름 돌아보기, 가을 신상 티저, 방학 콘텐츠, 휴가 후기"),
+                9: ("가을 시작", "가을 무드 전환, 추석 기획, 가을 아이템 추천, 새학기 콘텐츠"),
+                10: ("가을 본격", "할로윈 기획, 단풍 비주얼, 가을 추천 리스트, 연말 준비 시작"),
+                11: ("연말 준비", "블프·연말 세일 기획, 크리스마스 준비, 올해의 베스트, 선물 가이드"),
+                12: ("연말/크리스마스", "크리스마스 콘텐츠, 연말 결산, 올해의 하이라이트, 새해 예고"),
+            }
+            season_name, season_idea = season_tips.get(month, ("시즌", "계절에 맞는 콘텐츠를 기획하세요"))
+
+            trends = []
+            trends.append(f"**{month}월 시즌 ({season_name})**: {season_idea}")
+            trends.append("**숏폼 우선 알고리즘**: 인스타그램이 릴스와 숏폼 콘텐츠의 도달을 우선 배분하고 있습니다. 기존 이미지/캐러셀 콘텐츠도 릴스 버전으로 재가공해 보세요.")
+            trends.append("**저장·공유 가중치 상승**: 좋아요보다 저장·공유가 알고리즘 가중치가 높아지고 있습니다. \"저장해두세요\" 같은 유틸리티 콘텐츠가 유리합니다.")
+            trends.append("**SEO형 캡션**: 인스타그램 검색 기능 강화로, 캡션에 검색 키워드를 자연스럽게 포함하는 것이 노출에 도움됩니다.")
+            trends.append("**협업·UGC 활용**: 사용자 제작 콘텐츠(UGC) 리그램, 팔로워 참여형 챌린지가 신뢰도와 도달을 동시에 높여줍니다.")
+
+            trends_items = "".join(f'<li style="margin-bottom:8px;font-size:13px">{t}</li>' for t in trends)
+            st.markdown(_card_accent.format(bg="#fffbeb", border="#fde68a", content=(
+                f'<p style="font-size:13px;font-weight:600;color:#92400e;margin:0 0 8px">트렌드 & 시즌 제안</p>'
+                f'<ul style="padding-left:18px;margin:0">{trends_items}</ul>'
+            )), unsafe_allow_html=True)
+
+            # 5) 최적 게시 공식
+            formula_parts = []
+            formula_parts.append(f"포맷: **{top_a['top_fmt']}**")
+            formula_parts.append(f"캡션: **{top_a['avg_cap']}자 내외**")
+            formula_parts.append(f"게시일: **{top_a['top_day']}요일**")
+            if top_a["hashtag_pct"] > 50:
+                formula_parts.append("해시태그: **필수 포함**")
+            if top_a["cta_pct"] > 30:
+                formula_parts.append("CTA: **행동 유도 문구 포함**")
+            if top_a["question_pct"] > 30:
+                formula_parts.append("소통: **질문형 캡션 활용**")
+            formula_html = " · ".join(formula_parts)
+
+            st.markdown(_card_accent.format(bg="#f8fafc", border="#94a3b8", content=(
+                f'<p style="font-size:13px;font-weight:600;color:#334155;margin:0 0 8px">최적 게시 공식</p>'
+                f'<p style="font-size:13px;margin:0">{formula_html}</p>'
+                f'<p style="font-size:12px;color:#64748b;margin:6px 0 0">이 공식을 기본으로 하되, 주 1회 실험적 콘텐츠를 섞어 새로운 성과 패턴을 발굴하세요.</p>'
             )), unsafe_allow_html=True)
 
     # ── 게시물 목록 ──

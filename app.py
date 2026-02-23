@@ -289,7 +289,6 @@ def render_insights_page(account):
     import pandas as pd
     import csv, io
 
-    st.markdown("## 콘텐츠 인사이트")
     st.caption(f"계정: **{account['name']}**")
 
     # ── 조회 조건 ──
@@ -1017,7 +1016,6 @@ if page == "📊 콘텐츠 인사이트":
     render_insights_page(selected_account)
     st.stop()
 
-st.title("📸 Instagram 게시물 올려줘!")
 
 # ── 메인: Step 1 - 콘텐츠 선택 ─────────────────────────────
 

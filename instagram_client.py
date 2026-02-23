@@ -252,11 +252,13 @@ class InstagramClient:
         return results
 
     def get_daily_follower_metrics(self, since=None, until=None):
-        """일별 팔로워 증감·도달·프로필 조회 데이터를 가져옵니다."""
+        """일별 팔로워 증감·도달 데이터를 가져옵니다."""
         url = f"{self.base_url}/{self.user_id}/insights"
-        metrics = "reach,follower_count,profile_views"
+        all_data = []
+
+        # reach, follower_count: period=day
         params = {
-            "metric": metrics,
+            "metric": "reach,follower_count",
             "period": "day",
             "access_token": self.access_token,
         }
@@ -266,7 +268,27 @@ class InstagramClient:
             params["until"] = int(until)
         resp = requests.get(url, params=params)
         self._check_response(resp)
-        return resp.json()
+        all_data.extend(resp.json().get("data", []))
+
+        # profile_views: metric_type=total_value, period=day
+        try:
+            params2 = {
+                "metric": "profile_views",
+                "period": "day",
+                "metric_type": "total_value",
+                "access_token": self.access_token,
+            }
+            if since:
+                params2["since"] = int(since)
+            if until:
+                params2["until"] = int(until)
+            resp2 = requests.get(url, params=params2)
+            self._check_response(resp2)
+            all_data.extend(resp2.json().get("data", []))
+        except Exception:
+            pass  # profile_views 실패 시 무시
+
+        return {"data": all_data}
 
     def get_media_list(self, limit=25):
         """최근 게시물 목록을 조회합니다 (릴스/동영상 포함)."""

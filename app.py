@@ -332,6 +332,16 @@ def render_insights_page(account):
 
     st.caption(f"계정: **{account['name']}**")
 
+    # 공통 카드 템플릿
+    _card = (
+        '<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:10px;padding:20px;margin-bottom:12px">'
+        '{content}</div>'
+    )
+    _card_accent = (
+        '<div style="background:{bg};border:1px solid {border};border-radius:10px;padding:20px;margin-bottom:12px">'
+        '{content}</div>'
+    )
+
     # ── 조회 조건 ──
     date_range = st.date_input(
         "게시일", value=(date.today() - timedelta(days=30), date.today()),
@@ -679,16 +689,6 @@ def render_insights_page(account):
     # ── 콘텐츠 분석 ──
     st.markdown("---")
     st.markdown("##### 콘텐츠 분석")
-
-    # 공통 데이터 준비
-    _card = (
-        '<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:10px;padding:20px;margin-bottom:12px">'
-        '{content}</div>'
-    )
-    _card_accent = (
-        '<div style="background:{bg};border:1px solid {border};border-radius:10px;padding:20px;margin-bottom:12px">'
-        '{content}</div>'
-    )
 
     tab_fmt, tab_cap, tab_day, tab_rank = st.tabs(["포맷별", "캡션 길이별", "요일별", "TOP / WORST"])
 

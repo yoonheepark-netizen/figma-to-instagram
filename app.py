@@ -2444,14 +2444,41 @@ if st.session_state.get("all_selected"):
                     try:
                         grp_info = all_selected[grp]
 
-                        # Figma 이미지에서 텍스트 추출
+                        # 이미지에서 텍스트 추출 (OCR)
                         image_texts = []
+
+                        # 1) Figma API 텍스트 레이어 추출 시도
                         if grp_info["source"] == "figma" and grp_info.get("node_ids"):
                             try:
                                 text_map = figma.extract_texts(grp_info["node_ids"])
                                 for nid in grp_info["node_ids"]:
                                     image_texts.extend(text_map.get(nid, []))
                             except Exception:
+                                pass
+
+                        # 2) 텍스트 레이어 없으면 OCR로 이미지에서 텍스트 인식
+                        if not image_texts:
+                            try:
+                                import pytesseract
+                                from PIL import Image
+                                from io import BytesIO
+
+                                img_urls_for_ocr = []
+                                if grp_info["source"] == "figma" and st.session_state.get(f"preview_{grp}"):
+                                    img_urls_for_ocr = st.session_state[f"preview_{grp}"][:5]
+                                elif grp_info["source"] == "url":
+                                    img_urls_for_ocr = grp_info["urls"][:5]
+
+                                for img_url in img_urls_for_ocr:
+                                    try:
+                                        resp = req.get(img_url, timeout=10)
+                                        img = Image.open(BytesIO(resp.content))
+                                        text = pytesseract.image_to_string(img, lang="kor+eng")
+                                        lines = [l.strip() for l in text.split("\n") if l.strip()]
+                                        image_texts.extend(lines)
+                                    except Exception:
+                                        pass
+                            except ImportError:
                                 pass
 
                         # 인사이트 데이터에서 키워드/해시태그/캡션 추출

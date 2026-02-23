@@ -73,6 +73,33 @@ def get_slack_webhook():
     return os.getenv("SLACK_WEBHOOK_URL", "")
 
 
+def send_slack_start(group_summaries):
+    """발행 시작 알림을 Slack으로 보냅니다."""
+    webhook_url = get_slack_webhook()
+    if not webhook_url:
+        return
+
+    lines = [f"• *{g['name']}* ({g['count']}장) → {g['account']}" for g in group_summaries]
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "🚀 Instagram 발행 시작"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*시간:* {datetime.now().strftime('%Y-%m-%d %H:%M')}\n*총 {len(group_summaries)}개 시리즈*\n\n" + "\n".join(lines),
+            },
+        },
+    ]
+
+    try:
+        req.post(webhook_url, json={"blocks": blocks}, timeout=5)
+    except Exception:
+        pass
+
+
 def send_slack_notification(results):
     """발행 결과를 Slack으로 알립니다."""
     webhook_url = get_slack_webhook()
@@ -603,6 +630,14 @@ if st.session_state.get("all_selected"):
             st.error(f"캡션을 입력해주세요: {', '.join(empty_captions)}")
         else:
             total = len(all_selected)
+
+            # Slack 시작 알림
+            start_summaries = [
+                {"name": grp, "count": len(nids), "account": group_settings[grp]["account"]["name"]}
+                for grp, nids in all_selected.items()
+            ]
+            send_slack_start(start_summaries)
+
             overall_progress = st.progress(0)
             results = []
 

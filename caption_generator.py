@@ -12,7 +12,7 @@ def generate_caption(
     top_hashtags=None,
     tone="정보성",
 ):
-    """Claude API를 사용하여 Instagram 캡션과 해시태그를 생성합니다.
+    """Google Gemini API를 사용하여 Instagram 캡션과 해시태그를 생성합니다.
 
     Args:
         image_urls: 이미지 URL 리스트 (비주얼 기반 캡션 생성용)
@@ -25,13 +25,13 @@ def generate_caption(
     Returns:
         dict: {"caption": str, "hashtags": str, "full": str}
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
 
-    import anthropic
+    from google import genai
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
     tone_guide = {
         "정보성": "정보를 명확하게 전달하는 교육적 톤. 핵심 포인트를 간결하게 정리.",
@@ -66,24 +66,27 @@ def generate_caption(
     prompt_text = "\n".join(parts)
 
     # 메시지 구성 (이미지가 있으면 vision 사용)
-    content = []
+    contents = []
     if image_urls:
+        import urllib.request
         for url in image_urls[:3]:
-            content.append({
-                "type": "image",
-                "source": {"type": "url", "url": url},
-            })
-        content.append({"type": "text", "text": prompt_text + "\n\n위 이미지의 내용을 반영하여 캡션을 작성해주세요."})
+            try:
+                resp = urllib.request.urlopen(url)
+                img_bytes = resp.read()
+                content_type = resp.headers.get("Content-Type", "image/png")
+                contents.append(genai.types.Part.from_bytes(data=img_bytes, mime_type=content_type))
+            except Exception:
+                pass
+        contents.append(prompt_text + "\n\n위 이미지의 내용을 반영하여 캡션을 작성해주세요.")
     else:
-        content.append({"type": "text", "text": prompt_text})
+        contents.append(prompt_text)
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
         )
-        result_text = response.content[0].text
+        result_text = response.text
 
         # 파싱
         caption = ""

@@ -152,7 +152,10 @@ def publish_one_group(group_name, node_ids, caption, scheduled_time, account, st
         ig.user_id = account["instagram_user_id"]
         ig.access_token = account["access_token"]
 
-        result = ig.publish_carousel(public_urls, caption, scheduled_time)
+        if len(public_urls) == 1:
+            result = ig.publish_single(public_urls[0], caption, scheduled_time)
+        else:
+            result = ig.publish_carousel(public_urls, caption, scheduled_time)
 
         result_info["success"] = True
         if result["status"] == "published":
@@ -320,11 +323,9 @@ if st.session_state.frame_groups:
                         )
                         if checked:
                             selected_frames.append(frame)
-                st.caption(f"{len(selected_frames)}장 선택")
-                if len(selected_frames) >= 2:
+                st.caption(f"{len(selected_frames)}장 선택" + (" (단일 이미지)" if len(selected_frames) == 1 else ""))
+                if len(selected_frames) >= 1:
                     all_selected[grp] = [f["id"] for f in selected_frames]
-                elif len(selected_frames) == 1:
-                    st.warning("캐러셀은 최소 2장 필요합니다.")
 
         st.session_state.all_selected = all_selected
 

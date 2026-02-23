@@ -83,6 +83,36 @@ class InstagramClient:
         logger.info(f"  발행 완료! media_id: {media_id}")
         return media_id
 
+    def publish_single(self, image_url, caption, scheduled_time=None):
+        """단일 이미지를 Instagram에 발행합니다."""
+        url = f"{self.base_url}/{self.user_id}/media"
+        params = {
+            "image_url": image_url,
+            "caption": caption,
+            "access_token": self.access_token,
+        }
+
+        if scheduled_time:
+            if isinstance(scheduled_time, datetime):
+                ts = int(scheduled_time.timestamp())
+            else:
+                ts = int(scheduled_time)
+            params["scheduled_publish_time"] = ts
+
+        resp = requests.post(url, data=params)
+        resp.raise_for_status()
+        container_id = resp.json()["id"]
+        logger.info(f"  single container 생성: {container_id}")
+
+        self._wait_for_container(container_id)
+
+        if scheduled_time:
+            logger.info(f"  예약 발행 설정 완료 (container: {container_id})")
+            return {"status": "scheduled", "container_id": container_id}
+
+        media_id = self._publish(container_id)
+        return {"status": "published", "media_id": media_id}
+
     def publish_carousel(self, image_urls, caption, scheduled_time=None):
         """Figma 이미지 URL들을 Instagram 캐러셀로 발행합니다.
 

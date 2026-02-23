@@ -25,6 +25,7 @@ except ImportError:
 from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
+from token_manager import TokenManager
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
 
@@ -200,10 +201,33 @@ with st.sidebar:
                 days_left = (exp_date - datetime.now()).days
                 if days_left <= 7:
                     st.error(f"⚠️ 토큰 만료 {days_left}일 남음!")
+                elif days_left <= 30:
+                    st.warning(f"토큰 만료: {expiry} ({days_left}일 남음)")
                 else:
                     st.caption(f"토큰 만료: {expiry} ({days_left}일 남음)")
             except ValueError:
                 pass
+
+        # 토큰 갱신 버튼
+        if st.button("🔄 토큰 갱신 (60일 연장)", use_container_width=True):
+            with st.spinner("토큰 갱신 중..."):
+                try:
+                    result = TokenManager.refresh_long_lived_token(
+                        selected_account["access_token"]
+                    )
+                    # accounts.json 업데이트
+                    for a in accounts:
+                        if a["name"] == selected_name:
+                            a["access_token"] = result["access_token"]
+                            a["token_expiry"] = result["token_expiry"]
+                            break
+                    save_accounts(accounts)
+                    st.success(
+                        f"토큰 갱신 완료! 새 만료일: {result['token_expiry']}"
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"갱신 실패: {e}")
 
     st.divider()
 

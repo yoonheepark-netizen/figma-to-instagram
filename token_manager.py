@@ -57,6 +57,28 @@ class TokenManager:
         return ig_id
 
     @staticmethod
+    def refresh_long_lived_token(existing_token):
+        """장기 토큰을 갱신합니다 (만료 전에만 가능, 60일 연장)."""
+        url = f"{Config.GRAPH_BASE_URL}/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": Config.META_APP_ID,
+            "client_secret": Config.META_APP_SECRET,
+            "fb_exchange_token": existing_token,
+        }
+        resp = requests.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        expires_in = data.get("expires_in", 5184000)
+        new_expiry = datetime.now() + timedelta(seconds=expires_in)
+        logger.info(f"토큰 갱신 완료 (새 만료일: {new_expiry.strftime('%Y-%m-%d')})")
+        return {
+            "access_token": data["access_token"],
+            "expires_in": expires_in,
+            "token_expiry": new_expiry.strftime("%Y-%m-%d"),
+        }
+
+    @staticmethod
     def is_token_expiring_soon(days_threshold=7):
         """저장된 토큰이 곧 만료되는지 확인합니다."""
         expiry_str = Config.IG_TOKEN_EXPIRY

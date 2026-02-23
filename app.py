@@ -288,7 +288,30 @@ def render_insights_page(account):
     with col_to:
         date_to = st.date_input("종료일", value=date.today(), key="insights_date_to")
 
-    fetch_clicked = st.button("📊 게시물 조회", use_container_width=True)
+    col_btn_fetch, col_btn_csv = st.columns([3, 1])
+    with col_btn_fetch:
+        fetch_clicked = st.button("📊 게시물 조회", use_container_width=True)
+    with col_btn_csv:
+        if st.session_state.get("insights_posts"):
+            import csv, io
+            csv_posts = st.session_state.insights_posts
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["날짜", "유형", "캡션", "좋아요", "댓글", "저장", "공유", "조회수", "도달"])
+            for p in csv_posts:
+                ins = p.get("insights", {})
+                writer.writerow([
+                    p.get("timestamp", "")[:10],
+                    p.get("_resolved_type", p.get("media_type", "")),
+                    (p.get("caption") or "")[:100],
+                    ins.get("likes", 0),
+                    ins.get("comments", 0),
+                    ins.get("saved", 0),
+                    ins.get("shares", 0),
+                    ins.get("views", 0),
+                    ins.get("reach", 0),
+                ])
+            st.download_button("📥 CSV", buf.getvalue(), file_name="insights.csv", mime="text/csv", use_container_width=True)
 
     if fetch_clicked:
         ig = InstagramClient()

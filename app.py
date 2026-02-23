@@ -516,9 +516,131 @@ def render_insights_page(account):
                 if permalink:
                     st.markdown(f"[Instagram에서 보기]({permalink})")
 
-    # ── CSV 다운로드 ──
+    # ── 콘텐츠 인사이트 분석 ──
     st.divider()
+    st.subheader("🔍 콘텐츠 인사이트 분석")
+
     import pandas as pd
+    from collections import defaultdict
+
+    # --- 포맷별 성과 비교 ---
+    format_stats = defaultdict(lambda: {"count": 0, "likes": 0, "comments": 0, "saved": 0, "shares": 0, "views": 0, "reach": 0})
+    for p in posts:
+        is_reels = p.get("media_product_type") == "REELS"
+        fmt = "릴스" if is_reels else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "기타")
+        ins = p.get("insights", {})
+        format_stats[fmt]["count"] += 1
+        for k in ["likes", "comments", "saved", "shares", "views", "reach"]:
+            format_stats[fmt][k] += (ins.get(k, 0) or 0)
+
+    if format_stats:
+        st.markdown("#### 📋 포맷별 평균 성과")
+        fmt_rows = []
+        for fmt, s in format_stats.items():
+            cnt = s["count"]
+            fmt_rows.append({
+                "포맷": fmt,
+                "게시물 수": cnt,
+                "평균 좋아요": round(s["likes"] / cnt),
+                "평균 댓글": round(s["comments"] / cnt),
+                "평균 저장": round(s["saved"] / cnt),
+                "평균 공유": round(s["shares"] / cnt),
+                "평균 조회": round(s["views"] / cnt),
+                "평균 도달": round(s["reach"] / cnt),
+            })
+        fmt_df = pd.DataFrame(fmt_rows).set_index("포맷")
+        st.dataframe(fmt_df, use_container_width=True)
+
+        # 최고 포맷 찾기
+        best_engage_fmt = max(format_stats.items(), key=lambda x: (x[1]["likes"] + x[1]["comments"] + x[1]["saved"]) / x[1]["count"])
+        best_reach_fmt = max(format_stats.items(), key=lambda x: x[1]["reach"] / x[1]["count"])
+        st.info(f"💡 **참여율(좋아요+댓글+저장)** 가장 높은 포맷: **{best_engage_fmt[0]}** · **도달** 가장 높은 포맷: **{best_reach_fmt[0]}**")
+
+    # --- 캡션 길이별 성과 ---
+    st.markdown("#### ✏️ 캡션 길이별 성과")
+    caption_buckets = {"짧음 (~50자)": [], "보통 (50~150자)": [], "긴 글 (150자~)": []}
+    for p in posts:
+        cap_len = len(p.get("caption") or "")
+        ins = p.get("insights", {})
+        engagement = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+        if cap_len <= 50:
+            caption_buckets["짧음 (~50자)"].append(engagement)
+        elif cap_len <= 150:
+            caption_buckets["보통 (50~150자)"].append(engagement)
+        else:
+            caption_buckets["긴 글 (150자~)"].append(engagement)
+
+    cap_rows = []
+    for label, vals in caption_buckets.items():
+        if vals:
+            cap_rows.append({"캡션 길이": label, "게시물 수": len(vals), "평균 참여": round(sum(vals) / len(vals))})
+    if cap_rows:
+        st.dataframe(pd.DataFrame(cap_rows).set_index("캡션 길이"), use_container_width=True)
+
+    # --- 요일별 성과 ---
+    st.markdown("#### 📅 요일별 평균 성과")
+    day_names = ["월", "화", "수", "목", "금", "토", "일"]
+    day_stats = defaultdict(lambda: {"count": 0, "likes": 0, "reach": 0, "engagement": 0})
+    for p in posts:
+        ts = p.get("timestamp", "")[:10]
+        if not ts:
+            continue
+        try:
+            d = datetime.strptime(ts, "%Y-%m-%d")
+            day = day_names[d.weekday()]
+        except ValueError:
+            continue
+        ins = p.get("insights", {})
+        day_stats[day]["count"] += 1
+        day_stats[day]["likes"] += (ins.get("likes", 0) or 0)
+        day_stats[day]["reach"] += (ins.get("reach", 0) or 0)
+        day_stats[day]["engagement"] += (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+
+    if day_stats:
+        day_rows = []
+        for day in day_names:
+            if day in day_stats:
+                s = day_stats[day]
+                cnt = s["count"]
+                day_rows.append({"요일": day, "게시물 수": cnt, "평균 좋아요": round(s["likes"] / cnt), "평균 도달": round(s["reach"] / cnt), "평균 참여": round(s["engagement"] / cnt)})
+        if day_rows:
+            st.dataframe(pd.DataFrame(day_rows).set_index("요일"), use_container_width=True)
+            best_day = max(day_rows, key=lambda x: x["평균 참여"])
+            st.info(f"💡 **{best_day['요일']}요일**에 올린 게시물의 평균 참여가 가장 높습니다.")
+
+    # --- TOP / WORST 게시물 ---
+    ranked = sorted(posts, key=lambda p: (p.get("insights", {}).get("likes", 0) or 0) + (p.get("insights", {}).get("comments", 0) or 0) + (p.get("insights", {}).get("saved", 0) or 0), reverse=True)
+
+    if len(ranked) >= 3:
+        st.markdown("#### 🏆 TOP 3 게시물 (참여 기준)")
+        for i, p in enumerate(ranked[:3], 1):
+            ins = p.get("insights", {})
+            engage = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+            cap = (p.get("caption") or "")[:60]
+            ts = p.get("timestamp", "")[:10]
+            link = p.get("permalink", "")
+            fmt = "릴스" if p.get("media_product_type") == "REELS" else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "")
+            text = f"**{i}위** · {ts} · {fmt} · 참여 {engage:,} (❤️{ins.get('likes',0) or 0} 💬{ins.get('comments',0) or 0} 📌{ins.get('saved',0) or 0}) · {cap}{'...' if len(p.get('caption','')or'') > 60 else ''}"
+            if link:
+                text += f" [↗]({link})"
+            st.markdown(text)
+
+        st.markdown("#### ⚠️ WORST 3 게시물 (참여 기준)")
+        for i, p in enumerate(ranked[-3:], 1):
+            ins = p.get("insights", {})
+            engage = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
+            cap = (p.get("caption") or "")[:60]
+            ts = p.get("timestamp", "")[:10]
+            link = p.get("permalink", "")
+            fmt = "릴스" if p.get("media_product_type") == "REELS" else {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(p.get("media_type", ""), "")
+            text = f"**{i}위** · {ts} · {fmt} · 참여 {engage:,} (❤️{ins.get('likes',0) or 0} 💬{ins.get('comments',0) or 0} 📌{ins.get('saved',0) or 0}) · {cap}{'...' if len(p.get('caption','')or'') > 60 else ''}"
+            if link:
+                text += f" [↗]({link})"
+            st.markdown(text)
+
+    st.divider()
+
+    # ── CSV 다운로드 ──
 
     rows = []
     for post in posts:

@@ -289,12 +289,13 @@ def render_insights_page(account):
         date_from = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
         date_to = date_from
 
+    import csv, io
+
     col_btn_fetch, col_btn_csv = st.columns([3, 1])
     with col_btn_fetch:
         fetch_clicked = st.button("📊 게시물 조회", use_container_width=True)
     with col_btn_csv:
         if st.session_state.get("insights_posts"):
-            import csv, io
             csv_posts = st.session_state.insights_posts
             buf = io.StringIO()
             writer = csv.writer(buf)
@@ -313,6 +314,8 @@ def render_insights_page(account):
                     ins.get("reach", 0),
                 ])
             st.download_button("📥 CSV", buf.getvalue(), file_name="insights.csv", mime="text/csv", use_container_width=True)
+        else:
+            st.button("📥 CSV", disabled=True, use_container_width=True)
 
     if fetch_clicked:
         ig = InstagramClient()

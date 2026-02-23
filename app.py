@@ -282,11 +282,12 @@ def render_insights_page(account):
 
     from datetime import datetime, date, timedelta
 
-    col_from, col_to = st.columns(2)
-    with col_from:
-        date_from = st.date_input("시작일", value=date.today() - timedelta(days=30), key="insights_date_from")
-    with col_to:
-        date_to = st.date_input("종료일", value=date.today(), key="insights_date_to")
+    date_range = st.date_input("게시일", value=(date.today() - timedelta(days=30), date.today()), key="insights_date_range")
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        date_from, date_to = date_range
+    else:
+        date_from = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
+        date_to = date_from
 
     col_btn_fetch, col_btn_csv = st.columns([3, 1])
     with col_btn_fetch:

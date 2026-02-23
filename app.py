@@ -247,27 +247,142 @@ with st.sidebar:
     st.divider()
 
     with st.expander("계정 관리"):
-        st.caption("새 계정 추가")
-        new_name = st.text_input("계정 이름", key="new_name")
-        new_ig_id = st.text_input("Instagram User ID", key="new_ig_id")
-        new_token = st.text_input("Access Token", key="new_token", type="password")
-        new_expiry = st.text_input("토큰 만료일 (YYYY-MM-DD)", key="new_expiry")
+        # ── 토큰 발급 도우미 ──
+        st.subheader("🔑 토큰 발급 도우미")
+        st.markdown(
+            "**단기 토큰**만 입력하면 장기 토큰 + Instagram User ID를 자동 조회합니다."
+        )
+        with st.popover("📖 단기 토큰 받는 법"):
+            st.markdown(
+                "1. [Meta Graph API Explorer](https://developers.facebook.com/tools/explorer/) 접속\n"
+                "2. 오른쪽 상단 **Meta App** 선택\n"
+                "3. **User Token** 선택\n"
+                "4. **Permissions** 추가:\n"
+                "   - `pages_show_list`\n"
+                "   - `instagram_basic`\n"
+                "   - `instagram_content_publish`\n"
+                "5. **Generate Access Token** 클릭\n"
+                "6. 생성된 토큰 복사 → 아래에 붙여넣기"
+            )
 
-        if st.button("계정 추가"):
-            if new_name and new_ig_id and new_token:
-                accounts.append(
-                    {
-                        "name": new_name,
-                        "instagram_user_id": new_ig_id,
-                        "access_token": new_token,
-                        "token_expiry": new_expiry,
-                    }
-                )
-                save_accounts(accounts)
-                st.success(f"'{new_name}' 계정이 추가되었습니다.")
-                st.rerun()
-            else:
-                st.error("이름, User ID, Token은 필수입니다.")
+        short_token = st.text_input(
+            "단기 토큰 붙여넣기",
+            type="password",
+            key="short_token",
+            help="Graph API Explorer에서 발급받은 단기 토큰 (~1시간 유효)",
+        )
+
+        if st.button("🔍 자동 조회", use_container_width=True, disabled=not short_token):
+            with st.spinner("토큰 교환 + 계정 조회 중..."):
+                try:
+                    # 1) 단기 → 장기 토큰 교환
+                    token_result = TokenManager.exchange_for_long_lived(short_token)
+                    long_token = token_result["access_token"]
+                    expires_in = token_result["expires_in"]
+                    new_expiry = (datetime.now() + timedelta(seconds=expires_in)).strftime("%Y-%m-%d")
+
+                    # 2) 연결된 Facebook 페이지 조회
+                    pages = TokenManager.get_page_access_token(long_token)
+
+                    if not pages:
+                        st.error("연결된 Facebook 페이지가 없습니다.")
+                    else:
+                        # 3) 각 페이지의 Instagram Business Account 조회
+                        found_accounts = []
+                        for page in pages:
+                            try:
+                                ig_id = TokenManager.get_ig_user_id(
+                                    page["id"], page["access_token"]
+                                )
+                                found_accounts.append({
+                                    "page_name": page["name"],
+                                    "ig_user_id": ig_id,
+                                })
+                            except Exception:
+                                pass
+
+                        if not found_accounts:
+                            st.error("Instagram Business 계정이 연결된 페이지가 없습니다.")
+                        else:
+                            st.session_state["_found_accounts"] = found_accounts
+                            st.session_state["_long_token"] = long_token
+                            st.session_state["_token_expiry"] = new_expiry
+                            st.success(
+                                f"✅ {len(found_accounts)}개 Instagram 계정 발견! 아래에서 추가하세요."
+                            )
+                except Exception as e:
+                    st.error(f"조회 실패: {e}")
+
+        # 조회 결과가 있으면 선택 UI 표시
+        if st.session_state.get("_found_accounts"):
+            found = st.session_state["_found_accounts"]
+            long_token = st.session_state["_long_token"]
+            token_expiry = st.session_state["_token_expiry"]
+
+            for fa in found:
+                col_info, col_add = st.columns([3, 1])
+                with col_info:
+                    st.text(f"📄 {fa['page_name']}")
+                    st.caption(f"IG ID: {fa['ig_user_id']}")
+                with col_add:
+                    already = any(
+                        a["instagram_user_id"] == fa["ig_user_id"]
+                        for a in accounts
+                    )
+                    if already:
+                        st.caption("등록됨 ✓")
+                    elif st.button("추가", key=f"add_{fa['ig_user_id']}"):
+                        accounts.append({
+                            "name": fa["page_name"],
+                            "instagram_user_id": fa["ig_user_id"],
+                            "access_token": long_token,
+                            "token_expiry": token_expiry,
+                        })
+                        save_accounts(accounts)
+                        st.success(f"'{fa['page_name']}' 추가 완료!")
+                        st.rerun()
+
+        st.divider()
+
+        # ── 수동 계정 추가 ──
+        with st.popover("✏️ 수동으로 계정 추가"):
+            new_name = st.text_input(
+                "계정 이름",
+                key="new_name",
+                help="표시용 이름 (예: 수壽, 건강지킴이)",
+            )
+            new_ig_id = st.text_input(
+                "Instagram User ID",
+                key="new_ig_id",
+                help="Instagram Business Account ID (숫자). Graph API Explorer에서 /me/accounts → instagram_business_account.id 로 확인",
+            )
+            new_token = st.text_input(
+                "Access Token",
+                key="new_token",
+                type="password",
+                help="장기 토큰 (60일 유효). 위 도우미로 자동 발급 권장",
+            )
+            new_expiry = st.text_input(
+                "토큰 만료일 (YYYY-MM-DD)",
+                key="new_expiry",
+                help="장기 토큰 발급일 + 60일",
+            )
+
+            if st.button("계정 추가"):
+                if new_name and new_ig_id and new_token:
+                    accounts.append(
+                        {
+                            "name": new_name,
+                            "instagram_user_id": new_ig_id,
+                            "access_token": new_token,
+                            "token_expiry": new_expiry,
+                        }
+                    )
+                    save_accounts(accounts)
+                    st.success(f"'{new_name}' 계정이 추가되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("이름, User ID, Token은 필수입니다.")
 
         if accounts:
             st.caption("계정 삭제")

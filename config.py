@@ -29,6 +29,10 @@ class Config:
     PUBLISH_MODE = os.getenv("PUBLISH_MODE", "immediate")
     SCHEDULED_TIME = os.getenv("SCHEDULED_TIME")
 
+    # GitHub (Gist 매니페스트)
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+    PENCIL_GIST_ID = os.getenv("PENCIL_GIST_ID")
+
     # API versions
     GRAPH_API_VERSION = "v21.0"
     GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"

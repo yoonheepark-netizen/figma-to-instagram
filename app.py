@@ -407,6 +407,39 @@ def render_insights_page(account):
     m5.metric("👁️ 조회", f"{total_views:,}" if has_insights else na)
     m6.metric("📣 도달", f"{total_reach:,}" if has_insights else na)
 
+    # ── 일자별 추이 차트 ──
+    if has_insights:
+        import pandas as pd
+
+        chart_rows = []
+        for p in posts:
+            ts = p.get("timestamp", "")[:10]
+            if not ts:
+                continue
+            ins = p.get("insights", {})
+            chart_rows.append({
+                "날짜": ts,
+                "좋아요": ins.get("likes", 0) or 0,
+                "댓글": ins.get("comments", 0) or 0,
+                "저장": ins.get("saved", 0) or 0,
+                "공유": ins.get("shares", 0) or 0,
+                "조회": ins.get("views", 0) or 0,
+                "도달": ins.get("reach", 0) or 0,
+            })
+
+        if chart_rows:
+            df = pd.DataFrame(chart_rows)
+            df["날짜"] = pd.to_datetime(df["날짜"])
+            df = df.groupby("날짜").sum().sort_index()
+
+            st.subheader("📈 일자별 추이")
+            chart_metrics = st.multiselect(
+                "지표 선택", ["좋아요", "댓글", "저장", "공유", "조회", "도달"],
+                default=["좋아요", "조회", "도달"], key="insights_chart_metrics"
+            )
+            if chart_metrics:
+                st.line_chart(df[chart_metrics])
+
     st.divider()
 
     # ── 게시물 카드 그리드 ──

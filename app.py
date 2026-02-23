@@ -282,7 +282,7 @@ def render_insights_page(account):
 
     col_fetch, col_limit = st.columns([2, 1])
     with col_limit:
-        limit = st.selectbox("조회 수", [12, 25, 50], index=0, key="insights_limit")
+        limit = st.selectbox("조회 게시물 수", [12, 25, 50], index=0, key="insights_limit")
     with col_fetch:
         fetch_clicked = st.button("📊 최근 게시물 조회", use_container_width=True)
 
@@ -332,7 +332,51 @@ def render_insights_page(account):
         st.info("'최근 게시물 조회' 버튼을 클릭하세요.")
         return
 
-    posts = st.session_state.insights_posts
+    all_posts = st.session_state.insights_posts
+
+    # ── 기간 필터 ──
+    from datetime import datetime, date, timedelta
+
+    post_dates = []
+    for p in all_posts:
+        ts = p.get("timestamp", "")[:10]
+        if ts:
+            try:
+                post_dates.append(datetime.strptime(ts, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+
+    if post_dates:
+        min_date = min(post_dates)
+        max_date = max(post_dates)
+    else:
+        min_date = date.today() - timedelta(days=30)
+        max_date = date.today()
+
+    col_from, col_to = st.columns(2)
+    with col_from:
+        date_from = st.date_input("시작일", value=min_date, min_value=min_date, max_value=max_date, key="insights_date_from")
+    with col_to:
+        date_to = st.date_input("종료일", value=max_date, min_value=min_date, max_value=max_date, key="insights_date_to")
+
+    posts = []
+    for p in all_posts:
+        ts = p.get("timestamp", "")[:10]
+        if ts:
+            try:
+                d = datetime.strptime(ts, "%Y-%m-%d").date()
+                if date_from <= d <= date_to:
+                    posts.append(p)
+            except ValueError:
+                posts.append(p)
+        else:
+            posts.append(p)
+
+    if not posts:
+        st.info("선택한 기간에 해당하는 게시물이 없습니다.")
+        return
+
+    st.caption(f"기간: {date_from} ~ {date_to} · {len(posts)}개 게시물")
 
     # ── 요약 지표 ──
     def _safe_sum(key):

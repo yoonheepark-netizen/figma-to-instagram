@@ -42,7 +42,7 @@ class InstagramClient:
         logger.info(f"  child container 생성: {container_id}")
         return container_id
 
-    def _wait_for_container(self, container_id, max_wait=60, interval=5):
+    def _wait_for_container(self, container_id, max_wait=180, interval=5):
         """컨테이너 상태가 FINISHED가 될 때까지 폴링합니다."""
         url = f"{self.base_url}/{container_id}"
         params = {"fields": "status_code", "access_token": self.access_token}

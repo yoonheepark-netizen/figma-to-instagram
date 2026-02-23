@@ -73,12 +73,23 @@ def get_slack_webhook():
     return os.getenv("SLACK_WEBHOOK_URL", "")
 
 
-def send_slack_start(group_summaries):
-    """발행 시작 알림을 Slack으로 보냅니다."""
+def _send_slack(blocks):
+    """Slack으로 메시지를 보냅니다. 실패 시 에러 메시지를 반환합니다."""
     webhook_url = get_slack_webhook()
     if not webhook_url:
-        return
+        return "Webhook URL 미설정"
 
+    try:
+        resp = req.post(webhook_url, json={"blocks": blocks}, timeout=10)
+        if resp.status_code != 200:
+            return f"Slack 응답 {resp.status_code}: {resp.text[:100]}"
+        return None
+    except Exception as e:
+        return f"Slack 전송 실패: {e}"
+
+
+def send_slack_start(group_summaries):
+    """발행 시작 알림을 Slack으로 보냅니다."""
     lines = [f"• *{g['name']}* ({g['count']}장) → {g['account']}" for g in group_summaries]
     blocks = [
         {
@@ -93,11 +104,7 @@ def send_slack_start(group_summaries):
             },
         },
     ]
-
-    try:
-        req.post(webhook_url, json={"blocks": blocks}, timeout=5)
-    except Exception:
-        pass
+    return _send_slack(blocks)
 
 
 def send_slack_notification(results):
@@ -136,10 +143,7 @@ def send_slack_notification(results):
             text += f"\n에러: {r.get('error', '알 수 없음')}"
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
 
-    try:
-        req.post(webhook_url, json={"blocks": blocks}, timeout=5)
-    except Exception:
-        pass
+    return _send_slack(blocks)
 
 
 # ── 프레임 그룹핑 ─────────────────────────────────────────
@@ -636,12 +640,21 @@ if st.session_state.get("all_selected"):
                 {"name": grp, "count": len(nids), "account": group_settings[grp]["account"]["name"]}
                 for grp, nids in all_selected.items()
             ]
-            send_slack_start(start_summaries)
+            slack_err = send_slack_start(start_summaries)
+            if slack_err:
+                st.caption(f"⚠️ Slack 시작 알림 실패: {slack_err}")
 
             overall_progress = st.progress(0)
             results = []
 
             for idx, (grp, node_ids) in enumerate(all_selected.items()):
+                # 2번째 게시물부터 Instagram rate limit 방지를 위해 대기
+                if idx > 0:
+                    import time as _time
+                    for sec in range(5, 0, -1):
+                        st.caption(f"⏳ 다음 게시물까지 {sec}초 대기 (rate limit 방지)...")
+                        _time.sleep(1)
+
                 settings = group_settings[grp]
                 status = st.status(f"[{idx + 1}/{total}] {grp} 발행 중...", expanded=True)
 
@@ -661,7 +674,7 @@ if st.session_state.get("all_selected"):
                     else:
                         status.update(label=f"⏰ {grp} 예약 완료!", state="complete")
                 else:
-                    status.update(label=f"❌ {grp} 실패: {result_info.get('error', '')[:50]}", state="error")
+                    status.update(label=f"❌ {grp} 실패: {result_info.get('error', '')[:80]}", state="error")
 
                 overall_progress.progress((idx + 1) / total)
 
@@ -675,7 +688,9 @@ if st.session_state.get("all_selected"):
             else:
                 st.warning(f"완료: 성공 {success_count}개 / 실패 {fail_count}개")
 
-            # Slack 알림
-            send_slack_notification(results)
-            if get_slack_webhook():
+            # Slack 완료 알림
+            slack_err = send_slack_notification(results)
+            if slack_err:
+                st.caption(f"⚠️ Slack 완료 알림 실패: {slack_err}")
+            elif get_slack_webhook():
                 st.caption("🔔 Slack 알림 전송 완료")

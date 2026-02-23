@@ -419,17 +419,24 @@ def render_insights_page(account):
                 is_reels = post.get("media_product_type") == "REELS"
 
                 if is_video or is_reels:
-                    media_url = post.get("thumbnail_url") or post.get("media_url")
+                    video_url = post.get("media_url")
+                    if video_url:
+                        st.video(video_url)
+                    else:
+                        thumb = post.get("thumbnail_url")
+                        if thumb:
+                            st.image(thumb, use_container_width=True)
+                        else:
+                            st.info("🎬 영상 로드 불가")
                 else:
                     media_url = post.get("media_url") or post.get("thumbnail_url")
-
-                if media_url:
-                    try:
-                        st.image(media_url, use_container_width=True)
-                    except Exception:
-                        st.info("🖼️ 이미지 로드 불가")
-                else:
-                    st.info("🖼️ 썸네일 없음")
+                    if media_url:
+                        try:
+                            st.image(media_url, use_container_width=True)
+                        except Exception:
+                            st.info("🖼️ 이미지 로드 불가")
+                    else:
+                        st.info("🖼️ 썸네일 없음")
 
                 ts = post.get("timestamp", "")[:10]
                 if is_reels:

@@ -442,6 +442,21 @@ def render_insights_page(account):
 
     st.divider()
 
+    # ── 정렬 ──
+    sort_options = {
+        "최신순": None,
+        "❤️ 좋아요 많은 순": "likes",
+        "💬 댓글 많은 순": "comments",
+        "📌 저장 많은 순": "saved",
+        "🔄 공유 많은 순": "shares",
+        "👁️ 조회 많은 순": "views",
+        "📣 도달 많은 순": "reach",
+    }
+    sort_choice = st.selectbox("정렬", list(sort_options.keys()), index=0, key="insights_sort")
+    sort_key = sort_options[sort_choice]
+    if sort_key:
+        posts = sorted(posts, key=lambda p: p.get("insights", {}).get(sort_key, 0) or 0, reverse=True)
+
     # ── 게시물 카드 그리드 ──
     type_label = {"IMAGE": "📷 이미지", "VIDEO": "🎬 동영상", "CAROUSEL_ALBUM": "📑 캐러셀"}
 

@@ -624,38 +624,35 @@ def render_insights_page(account):
             fmt = _fmt_type(p)
             link = p.get("permalink", "")
             link_html = f' · <a href="{link}" target="_blank" style="color:#6c757d;font-size:12px">보기</a>' if link else ""
+            thumb = p.get("thumbnail_url") or p.get("media_url") or ""
+            img_html = f'<img src="{thumb}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0" />' if thumb else '<div style="width:56px;height:56px;background:#e9ecef;border-radius:6px;flex-shrink:0"></div>'
             return _card_accent.format(bg=color_bg, border=color_border, content=(
-                f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">'
-                f'<span style="font-size:20px;font-weight:700;color:{color_border}">{rank}</span>'
-                f'<span style="font-size:13px;color:#6c757d">{ts} · {fmt}</span>'
+                f'<div style="display:flex;gap:12px;align-items:start">'
+                f'{img_html}'
+                f'<div style="flex:1;min-width:0">'
+                f'<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">'
+                f'<span style="font-size:18px;font-weight:700;color:{color_border}">{rank}</span>'
+                f'<span style="font-size:12px;color:#6c757d">{ts} · {fmt}</span>'
                 f'</div>'
-                f'<p style="font-size:14px;font-weight:600;margin:0 0 6px">참여 {eng:,}</p>'
-                f'<p style="font-size:12px;color:#495057;margin:0">'
+                f'<p style="font-size:13px;font-weight:600;margin:0 0 3px">참여 {eng:,}</p>'
+                f'<p style="font-size:11px;color:#495057;margin:0">'
                 f'좋아요 {ins.get("likes",0) or 0} · 댓글 {ins.get("comments",0) or 0} · 저장 {ins.get("saved",0) or 0}'
                 f'{link_html}</p>'
-                f'<p style="font-size:12px;color:#868e96;margin:4px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'<p style="font-size:11px;color:#868e96;margin:2px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
                 f'{cap}{"..." if len(p.get("caption","") or "") > 60 else ""}</p>'
+                f'</div></div>'
             ))
-
-        def _render_rank_section(title, posts, color_bg, color_border):
-            st.markdown(f'<p style="font-size:13px;font-weight:600;margin-bottom:8px">{title}</p>', unsafe_allow_html=True)
-            for i, p in enumerate(posts, 1):
-                st.markdown(_rank_card(p, i, color_bg, color_border), unsafe_allow_html=True)
-                thumb = p.get("thumbnail_url") or p.get("media_url")
-                if thumb:
-                    is_reels = p.get("media_product_type") == "REELS"
-                    is_video = p.get("media_type") == "VIDEO"
-                    if (is_reels or is_video) and p.get("media_url"):
-                        st.video(p["media_url"])
-                    else:
-                        st.image(thumb, use_container_width=True)
 
         if len(ranked) >= 3:
             col_top, col_worst = st.columns(2)
             with col_top:
-                _render_rank_section("TOP 3", ranked[:3], "#f0fdf4", "#22c55e")
+                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">TOP 3</p>', unsafe_allow_html=True)
+                for i, p in enumerate(ranked[:3], 1):
+                    st.markdown(_rank_card(p, i, "#f0fdf4", "#22c55e"), unsafe_allow_html=True)
             with col_worst:
-                _render_rank_section("WORST 3", list(reversed(ranked[-3:])), "#fef2f2", "#ef4444")
+                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">WORST 3</p>', unsafe_allow_html=True)
+                for i, p in enumerate(reversed(ranked[-3:]), 1):
+                    st.markdown(_rank_card(p, i, "#fef2f2", "#ef4444"), unsafe_allow_html=True)
 
         # ── 패턴 분석 & 인사이트 ──
         if len(ranked) >= 6:

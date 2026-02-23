@@ -198,6 +198,76 @@ class InstagramClient:
         self._check_response(resp)
         return resp.json()
 
+    def get_account_info(self):
+        """계정 프로필 정보를 조회합니다 (팔로워 수, 게시물 수 등)."""
+        url = f"{self.base_url}/{self.user_id}"
+        params = {
+            "fields": "followers_count,follows_count,media_count,username,name,biography,profile_picture_url",
+            "access_token": self.access_token,
+        }
+        resp = requests.get(url, params=params)
+        self._check_response(resp)
+        return resp.json()
+
+    def get_account_insights(self, metric, period="day", since=None, until=None):
+        """계정 수준 인사이트를 조회합니다 (도달, 팔로워 증감 등)."""
+        url = f"{self.base_url}/{self.user_id}/insights"
+        params = {
+            "metric": metric,
+            "period": period,
+            "access_token": self.access_token,
+        }
+        if since:
+            params["since"] = int(since)
+        if until:
+            params["until"] = int(until)
+        resp = requests.get(url, params=params)
+        self._check_response(resp)
+        return resp.json()
+
+    def get_follower_demographics(self):
+        """팔로워 인구통계 데이터를 조회합니다 (도시, 국가, 연령·성별)."""
+        url = f"{self.base_url}/{self.user_id}/insights"
+        metrics = "follower_demographics"
+        breakdowns = ["city", "country", "age,gender"]
+        results = {}
+        for bd in breakdowns:
+            try:
+                params = {
+                    "metric": metrics,
+                    "period": "lifetime",
+                    "metric_type": "total_value",
+                    "timeframe": "this_month",
+                    "breakdown": bd,
+                    "access_token": self.access_token,
+                }
+                resp = requests.get(url, params=params)
+                self._check_response(resp)
+                data = resp.json().get("data", [])
+                if data:
+                    total_val = data[0].get("total_value", {})
+                    results[bd.replace(",", "_")] = total_val.get("breakdowns", [{}])[0].get("results", [])
+            except Exception as e:
+                results[f"_error_{bd}"] = str(e)
+        return results
+
+    def get_daily_follower_metrics(self, since=None, until=None):
+        """일별 팔로워 증감·도달·프로필 조회 데이터를 가져옵니다."""
+        url = f"{self.base_url}/{self.user_id}/insights"
+        metrics = "reach,follower_count,profile_views"
+        params = {
+            "metric": metrics,
+            "period": "day",
+            "access_token": self.access_token,
+        }
+        if since:
+            params["since"] = int(since)
+        if until:
+            params["until"] = int(until)
+        resp = requests.get(url, params=params)
+        self._check_response(resp)
+        return resp.json()
+
     def get_media_list(self, limit=25):
         """최근 게시물 목록을 조회합니다 (릴스/동영상 포함)."""
         url = f"{self.base_url}/{self.user_id}/media"

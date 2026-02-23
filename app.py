@@ -376,6 +376,19 @@ def render_insights_page(account):
             media_data = ig.get_media_list(limit=50)
             all_posts = media_data.get("data", [])
 
+        # 팔로워 데이터 수집
+        follower_data = {}
+        try:
+            with st.spinner("팔로워 분석 중..."):
+                follower_data["account"] = ig.get_account_info()
+                follower_data["demographics"] = ig.get_follower_demographics()
+                since_ts = int(datetime.combine(date_from, datetime.min.time()).timestamp())
+                until_ts = int(datetime.combine(date_to, datetime.max.time()).timestamp())
+                follower_data["daily"] = ig.get_daily_follower_metrics(since=since_ts, until=until_ts)
+        except Exception as e:
+            follower_data["_error"] = str(e)
+        st.session_state.follower_data = follower_data
+
         posts = []
         for p in all_posts:
             ts = p.get("timestamp", "")[:10]
@@ -434,6 +447,179 @@ def render_insights_page(account):
         for p in posts if "_errors" not in p.get("insights", {})
     )
     na = "–"
+
+    # ── 팔로워 분석 ──
+    fd = st.session_state.get("follower_data", {})
+    acct = fd.get("account", {})
+    demo = fd.get("demographics", {})
+    daily_raw = fd.get("daily", {})
+
+    if acct and "_error" not in fd:
+        st.markdown("##### 팔로워 분석")
+
+        # 기본 지표
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1.metric("팔로워", f'{acct.get("followers_count", 0):,}')
+        fc2.metric("팔로잉", f'{acct.get("follows_count", 0):,}')
+        fc3.metric("게시물", f'{acct.get("media_count", 0):,}')
+        followers_count = acct.get("followers_count", 0)
+        follows_count = acct.get("follows_count", 0)
+        ff_ratio = round(followers_count / max(follows_count, 1), 1)
+        fc4.metric("팔로워/팔로잉 비율", f"{ff_ratio}")
+
+        # 일별 팔로워 증감 / 도달 / 프로필 조회 차트
+        daily_data = daily_raw.get("data", [])
+        if daily_data:
+            daily_chart_rows = []
+            for metric_item in daily_data:
+                m_name = metric_item.get("name", "")
+                label_map = {"reach": "도달", "follower_count": "팔로워 증감", "profile_views": "프로필 조회"}
+                label = label_map.get(m_name, m_name)
+                for val in metric_item.get("values", []):
+                    daily_chart_rows.append({
+                        "날짜": val.get("end_time", "")[:10],
+                        "지표": label,
+                        "값": val.get("value", 0),
+                    })
+            if daily_chart_rows:
+                daily_df = pd.DataFrame(daily_chart_rows)
+                daily_df["날짜"] = pd.to_datetime(daily_df["날짜"])
+                pivot_df = daily_df.pivot_table(index="날짜", columns="지표", values="값", aggfunc="sum").fillna(0)
+                st.markdown("---")
+                st.markdown("##### 일별 계정 성과")
+                daily_metrics_sel = st.multiselect(
+                    "지표", list(pivot_df.columns), default=list(pivot_df.columns),
+                    key="follower_daily_metrics", label_visibility="collapsed",
+                )
+                if daily_metrics_sel:
+                    st.line_chart(pivot_df[daily_metrics_sel])
+
+        # 인구통계 분석
+        has_demo = any(k for k in demo if not k.startswith("_error"))
+        if has_demo:
+            st.markdown("---")
+            st.markdown("##### 팔로워 인구통계")
+            demo_tabs = st.tabs(["연령·성별", "도시", "국가"])
+
+            # 연령·성별
+            with demo_tabs[0]:
+                age_gender = demo.get("age_gender", [])
+                if age_gender:
+                    ag_rows = []
+                    for item in age_gender:
+                        dim = item.get("dimension_values", [])
+                        if len(dim) >= 2:
+                            age = dim[0]
+                            gender_raw = dim[1]
+                            gender = {"M": "남성", "F": "여성", "U": "기타"}.get(gender_raw, gender_raw)
+                            ag_rows.append({"연령대": age, "성별": gender, "수": item.get("value", 0)})
+                    if ag_rows:
+                        ag_df = pd.DataFrame(ag_rows)
+                        total = ag_df["수"].sum()
+
+                        # 성별 비율 요약
+                        gender_summary = ag_df.groupby("성별")["수"].sum()
+                        gc1, gc2, gc3 = st.columns(3)
+                        for col, g in zip([gc1, gc2, gc3], ["여성", "남성", "기타"]):
+                            v = gender_summary.get(g, 0)
+                            pct = round(v / max(total, 1) * 100, 1)
+                            col.metric(g, f"{v:,} ({pct}%)")
+
+                        # 연령대별 바 차트
+                        age_pivot = ag_df.pivot_table(index="연령대", columns="성별", values="수", aggfunc="sum").fillna(0)
+                        age_order = sorted(age_pivot.index, key=lambda x: int(x.split("-")[0]) if "-" in x else 0)
+                        age_pivot = age_pivot.reindex(age_order)
+                        st.bar_chart(age_pivot)
+
+                        # 핵심 연령대
+                        age_total = ag_df.groupby("연령대")["수"].sum().sort_values(ascending=False)
+                        top_ages = age_total.head(3)
+                        top_age_text = ", ".join(f"**{a}** ({round(v/max(total,1)*100,1)}%)" for a, v in top_ages.items())
+                        st.caption(f"핵심 연령대: {top_age_text}")
+                else:
+                    st.caption("연령·성별 데이터를 불러올 수 없습니다.")
+
+            # 도시
+            with demo_tabs[1]:
+                city_data = demo.get("city", [])
+                if city_data:
+                    city_rows = [{"도시": item.get("dimension_values", [""])[0], "수": item.get("value", 0)} for item in city_data]
+                    city_df = pd.DataFrame(city_rows).sort_values("수", ascending=False).head(15)
+                    total_city = sum(r["수"] for r in city_rows)
+                    city_df["비율"] = city_df["수"].apply(lambda x: f"{round(x / max(total_city, 1) * 100, 1)}%")
+
+                    # TOP 5 도시 카드
+                    top5 = city_df.head(5)
+                    cols = st.columns(5)
+                    for col, (_, row) in zip(cols, top5.iterrows()):
+                        col.metric(row["도시"], f'{row["수"]:,}', row["비율"])
+
+                    with st.expander("전체 도시 보기"):
+                        st.dataframe(city_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("도시 데이터를 불러올 수 없습니다.")
+
+            # 국가
+            with demo_tabs[2]:
+                country_data = demo.get("country", [])
+                if country_data:
+                    country_rows = [{"국가": item.get("dimension_values", [""])[0], "수": item.get("value", 0)} for item in country_data]
+                    country_df = pd.DataFrame(country_rows).sort_values("수", ascending=False).head(15)
+                    total_country = sum(r["수"] for r in country_rows)
+                    country_df["비율"] = country_df["수"].apply(lambda x: f"{round(x / max(total_country, 1) * 100, 1)}%")
+
+                    top5c = country_df.head(5)
+                    cols = st.columns(5)
+                    for col, (_, row) in zip(cols, top5c.iterrows()):
+                        col.metric(row["국가"], f'{row["수"]:,}', row["비율"])
+
+                    with st.expander("전체 국가 보기"):
+                        st.dataframe(country_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("국가 데이터를 불러올 수 없습니다.")
+
+        # 팔로워 기반 인사이트 요약
+        if acct:
+            insights_items = []
+            if followers_count > 0 and len(posts) > 0:
+                avg_reach = _safe("reach") / len(posts) if has_insights else 0
+                reach_rate = round(avg_reach / followers_count * 100, 1) if followers_count else 0
+                if reach_rate > 0:
+                    insights_items.append(f"게시물당 평균 도달률 **{reach_rate}%** (팔로워 대비)")
+                    if reach_rate > 100:
+                        insights_items.append("도달률이 100%를 초과 → 비팔로워에게 노출이 잘 되는 계정입니다. 릴스·공유 확산 전략을 강화하세요.")
+                    elif reach_rate > 30:
+                        insights_items.append("도달률이 양호합니다. 현재 콘텐츠 전략을 유지하면서 공유 유도를 강화해보세요.")
+                    elif reach_rate > 10:
+                        insights_items.append("도달률이 평균적입니다. 릴스 비중을 높이거나 해시태그를 최적화해보세요.")
+                    else:
+                        insights_items.append("도달률이 낮습니다. 팔로워 참여를 높이는 인터랙티브 콘텐츠(투표, 질문)를 시도해보세요.")
+
+                avg_eng = (_safe("likes") + _safe("comments") + _safe("saved")) / len(posts) if has_insights else 0
+                eng_rate = round(avg_eng / followers_count * 100, 2) if followers_count else 0
+                if eng_rate > 0:
+                    insights_items.append(f"게시물당 평균 참여율 **{eng_rate}%** (좋아요+댓글+저장 / 팔로워)")
+                    if eng_rate > 3:
+                        insights_items.append("참여율 우수 — 팔로워와의 관계가 매우 좋습니다.")
+                    elif eng_rate > 1:
+                        insights_items.append("참여율 양호 — 꾸준히 소통형 콘텐츠를 유지하세요.")
+                    else:
+                        insights_items.append("참여율 개선 필요 — 스토리·질문·투표 등 쌍방향 콘텐츠를 늘려보세요.")
+
+            if ff_ratio > 5:
+                insights_items.append(f"팔로워/팔로잉 비율 **{ff_ratio}** — 영향력 있는 계정입니다.")
+            elif ff_ratio < 1:
+                insights_items.append(f"팔로워/팔로잉 비율 **{ff_ratio}** — 팔로잉 정리 또는 콘텐츠 강화로 자연 유입을 늘려보세요.")
+
+            if insights_items:
+                st.markdown("---")
+                items_html = "".join(f'<li style="margin-bottom:8px;font-size:13px">{it}</li>' for it in insights_items)
+                st.markdown(_card_accent.format(bg="#f8fafc", border="#cbd5e1", content=(
+                    f'<p style="font-size:13px;font-weight:600;color:#334155;margin:0 0 8px">팔로워 기반 인사이트</p>'
+                    f'<ul style="padding-left:18px;margin:0">{items_html}</ul>'
+                )), unsafe_allow_html=True)
+
+    st.markdown("---")
 
     # ── 요약 지표 ──
     st.markdown(f"##### {date_from} ~ {date_to} · {len(posts)}개 게시물")

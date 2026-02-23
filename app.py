@@ -482,6 +482,16 @@ def render_insights_page(account):
     st.markdown("---")
     st.markdown("##### 콘텐츠 분석")
 
+    # 공통 데이터 준비
+    _card = (
+        '<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:10px;padding:20px;margin-bottom:12px">'
+        '{content}</div>'
+    )
+    _card_accent = (
+        '<div style="background:{bg};border:1px solid {border};border-radius:10px;padding:20px;margin-bottom:12px">'
+        '{content}</div>'
+    )
+
     tab_fmt, tab_cap, tab_day, tab_rank = st.tabs(["포맷별", "캡션 길이별", "요일별", "TOP / WORST"])
 
     with tab_fmt:
@@ -494,23 +504,40 @@ def render_insights_page(account):
                 format_stats[fmt][k] += (ins.get(k, 0) or 0)
 
         if format_stats:
-            fmt_rows = []
-            for fmt, s in format_stats.items():
+            # 포맷별 metric 카드
+            fmt_cols = st.columns(len(format_stats))
+            for col, (fmt, s) in zip(fmt_cols, format_stats.items()):
                 cnt = s["count"]
-                fmt_rows.append({
-                    "포맷": fmt, "게시물": cnt,
-                    "평균 좋아요": round(s["likes"] / cnt),
-                    "평균 댓글": round(s["comments"] / cnt),
-                    "평균 저장": round(s["saved"] / cnt),
-                    "평균 공유": round(s["shares"] / cnt),
-                    "평균 조회": round(s["views"] / cnt),
-                    "평균 도달": round(s["reach"] / cnt),
-                })
-            st.dataframe(pd.DataFrame(fmt_rows).set_index("포맷"), use_container_width=True)
+                avg_eng = round((s["likes"] + s["comments"] + s["saved"]) / cnt)
+                avg_reach = round(s["reach"] / cnt)
+                with col:
+                    st.markdown(_card.format(content=(
+                        f'<p style="font-size:11px;color:#6c757d;margin:0 0 4px">포맷</p>'
+                        f'<p style="font-size:18px;font-weight:700;margin:0 0 12px">{fmt}</p>'
+                        f'<p style="font-size:12px;color:#495057;margin:0">게시물 {cnt}개</p>'
+                        f'<p style="font-size:12px;color:#495057;margin:0">평균 참여 {avg_eng:,}</p>'
+                        f'<p style="font-size:12px;color:#495057;margin:0">평균 도달 {avg_reach:,}</p>'
+                    )), unsafe_allow_html=True)
+
+            # 상세 테이블
+            with st.expander("상세 데이터"):
+                fmt_rows = []
+                for fmt, s in format_stats.items():
+                    cnt = s["count"]
+                    fmt_rows.append({
+                        "포맷": fmt, "게시물": cnt,
+                        "평균 좋아요": round(s["likes"] / cnt),
+                        "평균 댓글": round(s["comments"] / cnt),
+                        "평균 저장": round(s["saved"] / cnt),
+                        "평균 공유": round(s["shares"] / cnt),
+                        "평균 조회": round(s["views"] / cnt),
+                        "평균 도달": round(s["reach"] / cnt),
+                    })
+                st.dataframe(pd.DataFrame(fmt_rows).set_index("포맷"), use_container_width=True)
 
             best_engage = max(format_stats.items(), key=lambda x: (x[1]["likes"] + x[1]["comments"] + x[1]["saved"]) / x[1]["count"])
             best_reach = max(format_stats.items(), key=lambda x: x[1]["reach"] / x[1]["count"])
-            st.info(f"참여 최고: **{best_engage[0]}** · 도달 최고: **{best_reach[0]}**")
+            st.caption(f"참여 최고: **{best_engage[0]}** · 도달 최고: **{best_reach[0]}**")
 
     with tab_cap:
         buckets = {"~50자": [], "50~150자": [], "150자~": []}
@@ -525,9 +552,24 @@ def render_insights_page(account):
             else:
                 buckets["150자~"].append(eng)
 
-        cap_rows = [{"길이": k, "게시물": len(v), "평균 참여": round(sum(v) / len(v))} for k, v in buckets.items() if v]
-        if cap_rows:
-            st.dataframe(pd.DataFrame(cap_rows).set_index("길이"), use_container_width=True)
+        # 캡션 길이별 카드
+        cap_cols = st.columns(3)
+        best_cap_avg = 0
+        best_cap_label = ""
+        for col, (label, vals) in zip(cap_cols, buckets.items()):
+            avg = round(sum(vals) / len(vals)) if vals else 0
+            if avg > best_cap_avg:
+                best_cap_avg = avg
+                best_cap_label = label
+            with col:
+                st.markdown(_card.format(content=(
+                    f'<p style="font-size:11px;color:#6c757d;margin:0 0 4px">캡션 길이</p>'
+                    f'<p style="font-size:18px;font-weight:700;margin:0 0 12px">{label}</p>'
+                    f'<p style="font-size:12px;color:#495057;margin:0">{len(vals)}개 게시물</p>'
+                    f'<p style="font-size:12px;color:#495057;margin:0">평균 참여 {avg:,}</p>'
+                )), unsafe_allow_html=True)
+        if best_cap_label:
+            st.caption(f"**{best_cap_label}** 캡션의 평균 참여가 가장 높습니다.")
 
     with tab_day:
         day_names = ["월", "화", "수", "목", "금", "토", "일"]
@@ -547,42 +589,64 @@ def render_insights_page(account):
             day_stats[day]["reach"] += (ins.get("reach", 0) or 0)
             day_stats[day]["engagement"] += (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
 
-        day_rows = []
-        for day in day_names:
-            if day in day_stats:
-                s = day_stats[day]
-                cnt = s["count"]
-                day_rows.append({"요일": day, "게시물": cnt, "평균 좋아요": round(s["likes"] / cnt), "평균 도달": round(s["reach"] / cnt), "평균 참여": round(s["engagement"] / cnt)})
-        if day_rows:
-            st.dataframe(pd.DataFrame(day_rows).set_index("요일"), use_container_width=True)
-            best_day = max(day_rows, key=lambda x: x["평균 참여"])
-            st.info(f"**{best_day['요일']}요일** 게시물의 평균 참여가 가장 높습니다.")
+        if day_stats:
+            # 요일별 바 차트
+            day_chart_data = []
+            best_day_name = ""
+            best_day_eng = 0
+            for day in day_names:
+                if day in day_stats:
+                    s = day_stats[day]
+                    cnt = s["count"]
+                    avg_eng = round(s["engagement"] / cnt)
+                    day_chart_data.append({"요일": day, "평균 참여": avg_eng, "게시물": cnt})
+                    if avg_eng > best_day_eng:
+                        best_day_eng = avg_eng
+                        best_day_name = day
+            if day_chart_data:
+                day_df = pd.DataFrame(day_chart_data).set_index("요일")
+                st.bar_chart(day_df["평균 참여"])
+
+                with st.expander("상세 데이터"):
+                    st.dataframe(day_df, use_container_width=True)
+
+                if best_day_name:
+                    st.caption(f"**{best_day_name}요일** 게시물의 평균 참여가 가장 높습니다.")
 
     with tab_rank:
         ranked = sorted(posts, key=lambda p: (p.get("insights", {}).get("likes", 0) or 0) + (p.get("insights", {}).get("comments", 0) or 0) + (p.get("insights", {}).get("saved", 0) or 0), reverse=True)
 
-        def _rank_row(p):
+        def _rank_card(p, rank, color_bg, color_border):
             ins = p.get("insights", {})
             eng = (ins.get("likes", 0) or 0) + (ins.get("comments", 0) or 0) + (ins.get("saved", 0) or 0)
-            cap = (p.get("caption") or "")[:50]
+            cap = (p.get("caption") or "")[:60]
             ts = p.get("timestamp", "")[:10]
-            link = p.get("permalink", "")
             fmt = _fmt_type(p)
-            text = f"{ts} · {fmt} · 참여 **{eng:,}** (좋아요 {ins.get('likes',0) or 0} / 댓글 {ins.get('comments',0) or 0} / 저장 {ins.get('saved',0) or 0})"
-            if cap:
-                text += f"  \n{cap}{'...' if len(p.get('caption','') or '') > 50 else ''}"
-            if link:
-                text += f" [링크]({link})"
-            return text
+            link = p.get("permalink", "")
+            link_html = f' · <a href="{link}" target="_blank" style="color:#6c757d;font-size:12px">보기</a>' if link else ""
+            return _card_accent.format(bg=color_bg, border=color_border, content=(
+                f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">'
+                f'<span style="font-size:20px;font-weight:700;color:{color_border}">{rank}</span>'
+                f'<span style="font-size:13px;color:#6c757d">{ts} · {fmt}</span>'
+                f'</div>'
+                f'<p style="font-size:14px;font-weight:600;margin:0 0 6px">참여 {eng:,}</p>'
+                f'<p style="font-size:12px;color:#495057;margin:0">'
+                f'좋아요 {ins.get("likes",0) or 0} · 댓글 {ins.get("comments",0) or 0} · 저장 {ins.get("saved",0) or 0}'
+                f'{link_html}</p>'
+                f'<p style="font-size:12px;color:#868e96;margin:4px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'{cap}{"..." if len(p.get("caption","") or "") > 60 else ""}</p>'
+            ))
 
         if len(ranked) >= 3:
-            st.markdown("###### TOP 3")
-            for i, p in enumerate(ranked[:3], 1):
-                st.markdown(f"**{i}.** {_rank_row(p)}")
-
-            st.markdown("###### WORST 3")
-            for i, p in enumerate(reversed(ranked[-3:]), 1):
-                st.markdown(f"**{i}.** {_rank_row(p)}")
+            col_top, col_worst = st.columns(2)
+            with col_top:
+                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">TOP 3</p>', unsafe_allow_html=True)
+                for i, p in enumerate(ranked[:3], 1):
+                    st.markdown(_rank_card(p, i, "#f0fdf4", "#22c55e"), unsafe_allow_html=True)
+            with col_worst:
+                st.markdown('<p style="font-size:13px;font-weight:600;margin-bottom:8px">WORST 3</p>', unsafe_allow_html=True)
+                for i, p in enumerate(reversed(ranked[-3:]), 1):
+                    st.markdown(_rank_card(p, i, "#fef2f2", "#ef4444"), unsafe_allow_html=True)
 
         # ── 패턴 분석 & 인사이트 ──
         if len(ranked) >= 6:
@@ -632,59 +696,58 @@ def render_insights_page(account):
             top_a = _analyze_group(top_n)
             worst_a = _analyze_group(worst_n)
 
-            st.markdown("---")
-            st.markdown("###### 콘텐츠 인사이트")
+            st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
 
-            # Do's
+            # Do's / Don'ts
             dos = []
             if top_a["top_fmt_pct"] >= 50:
-                dos.append(f"**{top_a['top_fmt']}** 포맷이 상위 콘텐츠의 {top_a['top_fmt_pct']}%를 차지합니다. 이 포맷을 주력으로 활용하세요.")
+                dos.append(f"**{top_a['top_fmt']}** 포맷이 상위의 {top_a['top_fmt_pct']}%를 차지 → 주력으로 활용")
             if top_a["avg_cap"] > worst_a["avg_cap"] + 30:
-                dos.append(f"상위 콘텐츠의 평균 캡션 길이는 **{top_a['avg_cap']}자**로, 하위({worst_a['avg_cap']}자)보다 깁니다. 충분한 맥락을 담아주세요.")
+                dos.append(f"캡션 평균 **{top_a['avg_cap']}자** (하위 {worst_a['avg_cap']}자) → 충분한 맥락 전달")
             elif top_a["avg_cap"] < worst_a["avg_cap"] - 30:
-                dos.append(f"상위 콘텐츠의 평균 캡션 길이는 **{top_a['avg_cap']}자**로, 하위({worst_a['avg_cap']}자)보다 짧습니다. 간결한 메시지가 효과적입니다.")
+                dos.append(f"캡션 평균 **{top_a['avg_cap']}자** (하위 {worst_a['avg_cap']}자) → 간결한 메시지가 효과적")
             if top_a["hashtag_pct"] > worst_a["hashtag_pct"] + 15:
-                dos.append(f"상위 콘텐츠의 **{top_a['hashtag_pct']}%**가 해시태그를 사용합니다. 관련 해시태그를 적극 활용하세요.")
+                dos.append(f"해시태그 사용률 **{top_a['hashtag_pct']}%** → 적극 활용")
             if top_a["cta_pct"] > worst_a["cta_pct"] + 15:
-                dos.append(f"상위 콘텐츠의 **{top_a['cta_pct']}%**에 행동 유도 문구(CTA)가 포함되어 있습니다. 댓글·DM·링크 등 CTA를 넣어보세요.")
+                dos.append(f"CTA 포함률 **{top_a['cta_pct']}%** → 행동 유도 문구 추가")
             if top_a["question_pct"] > worst_a["question_pct"] + 15:
-                dos.append(f"상위 콘텐츠의 **{top_a['question_pct']}%**에 질문이 포함되어 있습니다. 팔로워와의 소통을 유도하세요.")
+                dos.append(f"질문 포함률 **{top_a['question_pct']}%** → 소통형 캡션 작성")
             if top_a["top_day"]:
-                dos.append(f"상위 콘텐츠는 **{top_a['top_day']}요일**에 집중되어 있습니다. 이 요일에 게시하는 것을 권장합니다.")
-
+                dos.append(f"**{top_a['top_day']}요일** 게시 비중 높음 → 이 요일에 집중")
             if not dos:
-                dos.append(f"상위 콘텐츠의 주요 포맷은 **{top_a['top_fmt']}**, 평균 캡션 **{top_a['avg_cap']}자**, 주요 게시 요일 **{top_a['top_day']}요일**입니다.")
+                dos.append(f"주요 포맷 **{top_a['top_fmt']}**, 캡션 **{top_a['avg_cap']}자**, **{top_a['top_day']}요일** 게시")
 
-            # Don'ts
             donts = []
             if worst_a["top_fmt_pct"] >= 50 and worst_a["top_fmt"] != top_a["top_fmt"]:
-                donts.append(f"하위 콘텐츠의 {worst_a['top_fmt_pct']}%가 **{worst_a['top_fmt']}** 포맷입니다. 이 포맷의 비중을 줄여보세요.")
+                donts.append(f"**{worst_a['top_fmt']}** 포맷 비중 {worst_a['top_fmt_pct']}% → 줄이기")
             if worst_a["hashtag_pct"] < top_a["hashtag_pct"] - 15:
-                donts.append(f"하위 콘텐츠의 해시태그 사용률이 **{worst_a['hashtag_pct']}%**로 낮습니다. 해시태그 없이 올리지 마세요.")
+                donts.append(f"해시태그 사용률 **{worst_a['hashtag_pct']}%**로 낮음 → 빠뜨리지 말기")
             if worst_a["cta_pct"] < top_a["cta_pct"] - 15:
-                donts.append(f"하위 콘텐츠의 CTA 포함률이 **{worst_a['cta_pct']}%**로 낮습니다. 행동 유도 없는 단순 게시는 참여를 떨어뜨립니다.")
+                donts.append(f"CTA 포함률 **{worst_a['cta_pct']}%** → 단순 게시 피하기")
             if worst_a["avg_cap"] > top_a["avg_cap"] + 50:
-                donts.append(f"하위 콘텐츠의 캡션이 평균 **{worst_a['avg_cap']}자**로 너무 깁니다. 핵심만 전달하세요.")
+                donts.append(f"캡션 평균 **{worst_a['avg_cap']}자**로 과도 → 핵심만")
             elif worst_a["avg_cap"] < 20:
-                donts.append(f"하위 콘텐츠의 캡션이 평균 **{worst_a['avg_cap']}자**로 너무 짧습니다. 최소한의 설명을 덧붙이세요.")
+                donts.append(f"캡션 평균 **{worst_a['avg_cap']}자**로 부족 → 최소 설명 추가")
             if worst_a["top_day"] and worst_a["top_day"] != top_a["top_day"]:
-                donts.append(f"하위 콘텐츠는 **{worst_a['top_day']}요일**에 집중되어 있습니다. 이 요일은 피하는 것이 좋습니다.")
-
+                donts.append(f"**{worst_a['top_day']}요일** 게시 성과 낮음 → 피하기")
             if not donts:
-                donts.append(f"하위 콘텐츠의 주요 포맷은 **{worst_a['top_fmt']}**, 평균 캡션 **{worst_a['avg_cap']}자**, 주요 게시 요일 **{worst_a['top_day']}요일**입니다.")
+                donts.append(f"주요 포맷 **{worst_a['top_fmt']}**, 캡션 **{worst_a['avg_cap']}자**, **{worst_a['top_day']}요일** 게시")
 
             col_do, col_dont = st.columns(2)
             with col_do:
-                st.markdown("**Do's**")
-                for d in dos:
-                    st.markdown(f"- {d}")
+                do_items = "".join(f'<li style="margin-bottom:6px;font-size:13px">{d}</li>' for d in dos)
+                st.markdown(_card_accent.format(bg="#f0fdf4", border="#bbf7d0", content=(
+                    f'<p style="font-size:14px;font-weight:700;color:#16a34a;margin:0 0 10px">Do\'s</p>'
+                    f'<ul style="padding-left:18px;margin:0">{do_items}</ul>'
+                )), unsafe_allow_html=True)
             with col_dont:
-                st.markdown("**Don'ts**")
-                for d in donts:
-                    st.markdown(f"- {d}")
+                dont_items = "".join(f'<li style="margin-bottom:6px;font-size:13px">{d}</li>' for d in donts)
+                st.markdown(_card_accent.format(bg="#fef2f2", border="#fecaca", content=(
+                    f'<p style="font-size:14px;font-weight:700;color:#dc2626;margin:0 0 10px">Don\'ts</p>'
+                    f'<ul style="padding-left:18px;margin:0">{dont_items}</ul>'
+                )), unsafe_allow_html=True)
 
             # 방향성 제안
-            st.markdown("###### 콘텐츠 방향성 제안")
             directions = []
             if top_a["top_fmt"] == "릴스":
                 directions.append("릴스가 높은 참여를 이끌어내고 있습니다. 숏폼 영상 비중을 늘리고, 트렌드 음원이나 빠른 편집을 활용해 보세요.")
@@ -696,19 +759,20 @@ def render_insights_page(account):
             if top_a["avg_reach"] > 0:
                 reach_ratio = top_a["avg_reach"] / max(worst_a["avg_reach"], 1)
                 if reach_ratio >= 2:
-                    directions.append(f"상위 콘텐츠의 평균 도달({top_a['avg_reach']:,})이 하위({worst_a['avg_reach']:,})의 {reach_ratio:.1f}배입니다. 알고리즘 확산이 잘 되는 콘텐츠의 패턴을 반복하세요.")
+                    directions.append(f"상위 콘텐츠의 평균 도달({top_a['avg_reach']:,})이 하위({worst_a['avg_reach']:,})의 {reach_ratio:.1f}배입니다. 알고리즘 확산 패턴을 반복하세요.")
 
             if top_a["question_pct"] > 30:
-                directions.append("질문형 캡션이 참여에 효과적입니다. '여러분은 어떤가요?', '어떻게 생각하세요?' 같은 열린 질문을 꾸준히 넣어주세요.")
-
+                directions.append("질문형 캡션이 참여에 효과적입니다. 열린 질문을 꾸준히 활용해보세요.")
             if top_a["cta_pct"] > 40:
-                directions.append("CTA가 포함된 게시물의 성과가 좋습니다. 저장·공유 유도, 댓글 참여 요청 등 구체적인 행동을 제안하세요.")
-
+                directions.append("CTA가 포함된 게시물의 성과가 좋습니다. 저장·공유 유도 등 구체적인 행동을 제안하세요.")
             if not directions:
                 directions.append(f"**{top_a['top_fmt']}** 포맷 + **{top_a['avg_cap']}자 내외 캡션** + **{top_a['top_day']}요일 게시**를 기본 공식으로 삼고, 매주 실험적 콘텐츠 1개를 섞어보세요.")
 
-            for d in directions:
-                st.markdown(f"- {d}")
+            dir_items = "".join(f'<li style="margin-bottom:6px;font-size:13px">{d}</li>' for d in directions)
+            st.markdown(_card_accent.format(bg="#eff6ff", border="#bfdbfe", content=(
+                f'<p style="font-size:14px;font-weight:700;color:#2563eb;margin:0 0 10px">콘텐츠 방향성</p>'
+                f'<ul style="padding-left:18px;margin:0">{dir_items}</ul>'
+            )), unsafe_allow_html=True)
 
     # ── 게시물 목록 ──
     st.markdown("---")

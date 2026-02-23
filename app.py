@@ -26,6 +26,7 @@ except ImportError:
 from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
+from pencil_client import PencilClient
 from token_manager import TokenManager
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
@@ -512,6 +513,12 @@ with st.sidebar:
         help="Figma URL에서 /file/ 뒤의 문자열",
     )
 
+    pencil_gist_id = st.text_input(
+        "Pencil Gist ID",
+        value=os.getenv("PENCIL_GIST_ID", ""),
+        help="cardupload 스크립트가 생성한 GitHub Gist ID",
+    )
+
     # Slack 설정 표시
     slack_url = get_slack_webhook()
     if slack_url:
@@ -769,68 +776,61 @@ with tab_figma:
 
 # ── Tab 2: Pencil.dev ──
 with tab_pencil:
-    st.caption("Pencil.dev에서 export한 카드뉴스를 GitHub Gist 매니페스트로 불러옵니다.")
-
-    pencil_gist_url = st.text_input(
-        "Gist URL 또는 ID",
-        value=os.getenv("PENCIL_GIST_ID", ""),
-        help="cardupload 스크립트가 생성한 GitHub Gist URL 또는 ID",
-        key="pencil_gist_input",
-    )
-
-    col_pencil_load, col_pencil_info = st.columns([1, 3])
-    with col_pencil_load:
+    col_load, col_info = st.columns([1, 3])
+    with col_load:
         if st.button("🔄 Pencil.dev 읽어오기", use_container_width=True):
-            gist_id = pencil_gist_url.strip().rstrip("/").split("/")[-1] if pencil_gist_url.strip() else ""
+            gist_id = pencil_gist_id.strip().rstrip("/").split("/")[-1] if pencil_gist_id.strip() else ""
             if not gist_id:
-                st.error("Gist URL 또는 ID를 입력해주세요.")
+                st.error("사이드바에서 Pencil Gist ID를 먼저 설정해주세요.")
             else:
-                with st.spinner("Gist에서 매니페스트를 가져오는 중..."):
+                with st.spinner("Pencil.dev에서 콘텐츠를 가져오는 중..."):
                     try:
-                        raw_url = f"https://gist.githubusercontent.com/{gist_id}/raw/pencil_manifest.json"
-                        resp = req.get(raw_url, timeout=10)
-                        resp.raise_for_status()
-                        manifest = resp.json()
-                        st.session_state.pencil_manifest = manifest
+                        pencil = PencilClient()
+                        series_list = pencil.get_series(gist_id)
+                        st.session_state.pencil_manifest = series_list
                     except Exception as e:
-                        st.error(f"Gist 불러오기 실패: {e}")
+                        st.error(f"불러오기 실패: {e}")
 
-    with col_pencil_info:
+    with col_info:
         if st.session_state.pencil_manifest:
-            series = st.session_state.pencil_manifest.get("series", {})
-            updated = st.session_state.pencil_manifest.get("updated_at", "")[:16]
-            st.caption(f"총 {len(series)}개 시리즈 | 최종 업데이트: {updated}")
-
-    if st.session_state.pencil_manifest:
-        series = st.session_state.pencil_manifest.get("series", {})
-
-        if not series:
-            st.info("매니페스트에 시리즈가 없습니다.")
-        else:
-            selected_pencil = st.multiselect(
-                "시리즈 선택 (여러 개 선택 가능, 최신순)",
-                list(series.keys()),
-                format_func=lambda x: f"{x} ({series[x]['count']}장)",
-                key="pencil_series_select",
+            st.caption(
+                f"총 {len(st.session_state.pencil_manifest)}개 이미지셋"
             )
 
-            if selected_pencil:
-                st.info(f"✅ {len(selected_pencil)}개 시리즈 선택됨")
+    if st.session_state.pencil_manifest:
+        series_list = st.session_state.pencil_manifest
 
-                for sname in selected_pencil:
-                    sdata = series[sname]
-                    images = sdata.get("images", [])
-                    with st.expander(f"📁 {sname} ({len(images)}장)", expanded=True):
-                        preview_cols = st.columns(min(len(images), 5))
-                        for i, img in enumerate(images):
-                            with preview_cols[i % 5]:
-                                try:
-                                    st.image(img["url"], caption=img["name"], use_container_width=True)
-                                except Exception:
-                                    st.caption(f"{i+1}. {img['name']}")
+        selected_pencil = st.multiselect(
+            "이미지셋 선택 (여러 개 선택 가능, 최신순)",
+            [s["name"] for s in series_list],
+            format_func=lambda x: f"{x} ({next(s['count'] for s in series_list if s['name'] == x)}장)",
+        )
 
-                    urls = [img["url"] for img in images]
-                    st.session_state.pencil_series[sname] = urls
+        if selected_pencil:
+            st.info(f"✅ {len(selected_pencil)}개 이미지셋 선택됨")
+
+            for sname in selected_pencil:
+                sdata = next(s for s in series_list if s["name"] == sname)
+                images = sdata.get("images", [])
+                with st.expander(f"📁 {sname} ({len(images)}장)", expanded=True):
+                    selected_images = []
+                    cols = st.columns(min(len(images), 5))
+                    for i, img in enumerate(images):
+                        with cols[i % 5]:
+                            checked = st.checkbox(
+                                img["name"],
+                                value=True,
+                                key=f"pencil_{sname}_{i}",
+                            )
+                            try:
+                                st.image(img["url"], use_container_width=True)
+                            except Exception:
+                                st.caption(f"{i+1}. {img['name']}")
+                            if checked:
+                                selected_images.append(img)
+                    st.caption(f"{len(selected_images)}장 선택" + (" (단일 이미지)" if len(selected_images) == 1 else ""))
+                    if selected_images:
+                        st.session_state.pencil_series[sname] = [img["url"] for img in selected_images]
 
 # ── Tab 3: 이미지 업로드 ──
 with tab_upload:

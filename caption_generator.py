@@ -226,6 +226,56 @@ def _is_valid_line(line):
     return True
 
 
+def _is_complete_sentence(line):
+    """문장이 완결된 형태인지 판단합니다. 미완성 문장을 걸러냅니다."""
+    line = line.strip()
+
+    # ── 앞부분이 잘린 미완성 문장 감지 ──
+    # 어미/조사로 시작하는 문장 (예: "요할까요?", "는 것입니다", "을 수 있습니다")
+    if re.match(r"^(요|죠|고|며|면서|지만|거나|든지|라서|니까|으니|ㄹ까|할까|할지)", line):
+        return False
+    # 연결어미로 시작 (앞 문장에서 잘림)
+    if re.match(r"^(하는|되는|있는|없는|같은|라는|라고|다고|으로|에서|부터|까지|처럼|만큼)", line) and len(line) < 15:
+        return False
+
+    # ── 뒷부분이 잘린 미완성 문장 감지 ──
+    # 따옴표/괄호가 열리고 닫히지 않음 (예: "돌리는 '골든")
+    open_quotes = line.count("'") + line.count("'") + line.count('"') + line.count('"')
+    close_quotes = line.count("'") + line.count("'") + line.count('"') + line.count('"')
+    if line.count("'") % 2 != 0 and not line.endswith((".", "!", "?", "다", "요")):
+        return False
+    if line.count("(") > line.count(")"):
+        return False
+
+    # 관형형/체언으로 끝나는 짧은 문장 (뒷부분 잘림, 예: "돌리는", "만드는", "골든")
+    if re.search(r"[는은인된할든른]$", line) and len(line) < 15:
+        return False
+
+    # 짧은 문장인데 문장 종결이 아닌 경우 (미완성 가능성 높음)
+    if len(line) < 15 and not re.search(r"[.다요!?세죠음임]$", line):
+        return False
+
+    # ── 무의미한 노이즈 패턴 ──
+    # 숫자+짧은 단어 조합 (예: "그 030 그저", "에 12 다")
+    words = line.split()
+    if len(words) <= 3:
+        num_noise = sum(1 for w in words if re.match(r"^\d+$", w) or len(w) <= 1)
+        if num_noise >= 2:
+            return False
+
+    # 한 글자 단어가 과반수인 경우 (OCR 파편)
+    if len(words) >= 2:
+        single_char_words = sum(1 for w in words if len(w) == 1)
+        if single_char_words / len(words) > 0.5:
+            return False
+
+    # 의미 없는 반복 패턴 (예: "ㅡㅡㅡ", "......")
+    if re.match(r"^[.\-ㅡ~·_=]{3,}", line):
+        return False
+
+    return True
+
+
 def _clean_ocr_line(line):
     """OCR 라인의 노이즈를 정리합니다."""
     # 줄 앞뒤 특수문자 제거
@@ -238,9 +288,17 @@ def _clean_ocr_line(line):
 
 
 def _clean_ocr_texts(raw_texts):
-    """OCR 원본 텍스트를 정제하여 의미 있는 문장만 반환합니다."""
+    """OCR 원본 텍스트를 정제하여 의미 있는 완결된 문장만 반환합니다."""
     cleaned = []
     seen = set()
+
+    # 시그니처/CTA와 유사한 텍스트 필터 패턴
+    signature_patterns = [
+        "thesoo", "@thesoo", "수壽", "수수",
+        "공식 홈페이지", "프로필 링크", "프로필링크",
+        "더 오래", "더 건강하게", "한의사가", "하의사가",
+        "한의 브랜드", "official",
+    ]
 
     for raw in raw_texts:
         # 줄 단위로 분리하여 처리
@@ -248,9 +306,12 @@ def _clean_ocr_texts(raw_texts):
             line = _clean_ocr_line(line)
             if not _is_valid_line(line):
                 continue
-            # URL, 브랜드명 등은 캡션 본문에서 제외 (시그니처에 이미 포함)
+            # 미완성 문장 필터
+            if not _is_complete_sentence(line):
+                continue
+            # URL, 브랜드명, 시그니처/CTA 중복 제외
             lower = line.lower()
-            if any(skip in lower for skip in ["thesoo", "@thesoo", "수壽", "수수", "공식 홈페이지"]):
+            if any(skip in lower for skip in signature_patterns):
                 continue
             if line not in seen:
                 seen.add(line)
@@ -321,6 +382,18 @@ def _score_sentence(line):
         score -= 30
     if re.search(r"[A-Z]{5,}", line) and not re.search(r"(BDNF|IGF|GMP|hGMP|CITES)", line):
         score -= 20
+
+    # 미완성 문장 추가 감점
+    # 주어 없이 서술어로만 시작하는 짧은 문장
+    if re.match(r"^(요|죠|고|며|라서|니까)", line):
+        score -= 40
+    # 명사/관형형으로 끝나는 짧은 문장 (뒷부분 잘림)
+    if len(line) < 15 and re.search(r"[는은인된할의]$", line):
+        score -= 20
+    # 의미 없는 짧은 단어 나열
+    words = line.split()
+    if len(words) >= 2 and all(len(w) <= 2 for w in words):
+        score -= 30
 
     return max(0, min(100, score))
 

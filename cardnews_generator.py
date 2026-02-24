@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import re
+import time
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -254,6 +256,125 @@ def suggest_topics() -> list[dict]:
         })
 
     return suggestions
+
+
+# ═══════════════════════════════════════════════════════════
+# 실시간 뉴스 트렌드 (건강/연예 뉴스 RSS)
+# ═══════════════════════════════════════════════════════════
+
+# 모듈 레벨 캐시 (Streamlit 리런마다 재호출 방지)
+_news_cache: dict = {"data": [], "timestamp": 0.0}
+_NEWS_CACHE_TTL = 1800  # 30분
+
+_NEWS_FEEDS = [
+    {
+        "name": "건강",
+        "url": "https://news.google.com/rss/search?q=%EA%B1%B4%EA%B0%95+%ED%95%9C%EB%B0%A9+%ED%95%9C%EC%9D%98%ED%95%99&hl=ko&gl=KR&ceid=KR:ko",
+        "tag": "건강뉴스",
+        "emoji": "💊",
+    },
+    {
+        "name": "연예건강",
+        "url": "https://news.google.com/rss/search?q=%EC%97%B0%EC%98%88%EC%9D%B8+%EA%B1%B4%EA%B0%95+%EB%8B%A4%EC%9D%B4%EC%96%B4%ED%8A%B8+%ED%94%BC%EB%B6%80&hl=ko&gl=KR&ceid=KR:ko",
+        "tag": "연예뉴스",
+        "emoji": "🎬",
+    },
+]
+
+
+def _fetch_rss_headlines(url: str, max_items: int = 10) -> list[str]:
+    """Google News RSS에서 헤드라인 추출"""
+    try:
+        resp = _requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        titles = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            if title_el is not None and title_el.text:
+                # Google News 제목에서 " - 매체명" 제거
+                t = re.sub(r"\s*-\s*[^-]+$", "", title_el.text).strip()
+                if t and len(t) > 5:
+                    titles.append(t)
+            if len(titles) >= max_items:
+                break
+        return titles
+    except Exception as e:
+        logger.warning(f"RSS 피드 가져오기 실패 ({url[:50]}...): {e}")
+        return []
+
+
+_NEWS_TRANSFORM_SYSTEM = """당신은 한의원 브랜드 '수(thesoo)'의 콘텐츠 기획자입니다.
+아래 뉴스 헤드라인들을 보고, 한의학 카드뉴스로 재해석할 수 있는 주제 3개를 추천하세요.
+
+## 규칙
+1. 뉴스 속 건강/라이프스타일 이슈를 한의학 관점으로 연결
+2. 연예인 이름은 직접 언급하지 말고, 현상/트렌드로 변환
+   예: "○○ 다이어트 비법" → "셀럽들 사이 유행하는 간헐적 단식, 한의학 관점은?"
+3. 검증 불가능한 주장 금지 — 뉴스 사실만 활용
+4. 각 주제는 20~40자, 호기심 유발하는 톤
+5. 관련 없는 뉴스는 무시
+
+## 출력 (반드시 JSON 배열만, 다른 텍스트 없이)
+```json
+[
+  {"topic": "주제 텍스트", "news_ref": "참고한 뉴스 키워드 5~10자"},
+  ...
+]
+```"""
+
+
+def _transform_headlines_to_topics(headlines: list[str], feed_name: str) -> list[dict]:
+    """뉴스 헤드라인 → 카드뉴스 주제 힌트로 변환 (LLM)"""
+    if not headlines:
+        return []
+
+    user_prompt = f"[{feed_name} 뉴스 헤드라인]\n" + "\n".join(
+        f"- {h}" for h in headlines
+    )
+
+    raw = _call_llm(_NEWS_TRANSFORM_SYSTEM, user_prompt, temperature=0.5, max_tokens=500)
+    if not raw:
+        return []
+
+    return _parse_ideas_json(raw, limit=3)
+
+
+def fetch_news_topics(force_refresh: bool = False) -> list[dict]:
+    """실시간 뉴스 기반 트렌드 주제 반환 (30분 캐시)
+
+    Returns: [{"label": str, "topic": str, "tag": str, "news_ref": str}, ...]
+    """
+    global _news_cache
+
+    now = time.time()
+    if (
+        not force_refresh
+        and _news_cache["data"]
+        and (now - _news_cache["timestamp"]) < _NEWS_CACHE_TTL
+    ):
+        return _news_cache["data"]
+
+    all_topics: list[dict] = []
+
+    for feed in _NEWS_FEEDS:
+        headlines = _fetch_rss_headlines(feed["url"])
+        if not headlines:
+            continue
+
+        transformed = _transform_headlines_to_topics(headlines, feed["name"])
+        for item in transformed:
+            topic_text = item.get("topic", "")
+            if topic_text:
+                all_topics.append({
+                    "label": f"{feed['emoji']} {topic_text}",
+                    "topic": topic_text,
+                    "tag": feed["tag"],
+                    "news_ref": item.get("news_ref", ""),
+                })
+
+    _news_cache = {"data": all_topics, "timestamp": now}
+    return all_topics
 
 
 # ═══════════════════════════════════════════════════════════

@@ -29,7 +29,7 @@ from cardnews_generator import (
     generate_ideas, evaluate_ideas,
     generate_full_script, generate_description,
     load_history, save_history, detect_season,
-    suggest_topics,
+    suggest_topics, fetch_news_topics,
 )
 from figma_client import FigmaClient
 from image_host import ImageHost
@@ -376,7 +376,7 @@ def render_cardnews_page():
     # ── 추천 주제 (시즌/절기/트렌드) ──
     suggestions = suggest_topics()
     if suggestions:
-        st.caption("추천 주제 — 클릭하면 주제 힌트에 자동 입력됩니다")
+        st.caption("📌 추천 주제 — 클릭하면 주제 힌트에 자동 입력됩니다")
         cols = st.columns(min(len(suggestions), 4))
         for idx, sug in enumerate(suggestions):
             col = cols[idx % len(cols)]
@@ -389,6 +389,42 @@ def render_cardnews_page():
                 ):
                     st.session_state.cn_pending_topic = sug["topic"]
                     st.rerun()
+
+    # ── 실시간 뉴스 트렌드 (건강/연예 기사) ──
+    if "cn_news_loaded" not in st.session_state:
+        st.session_state.cn_news_loaded = False
+
+    news_col1, news_col2 = st.columns([6, 1])
+    with news_col1:
+        st.caption("📰 실시간 뉴스 트렌드 — 건강/연예 기사에서 추출한 주제")
+    with news_col2:
+        refresh_news = st.button("🔄 새로고침", key="cn_news_refresh")
+
+    if refresh_news:
+        st.session_state.cn_news_loaded = True
+
+    if st.session_state.cn_news_loaded:
+        with st.spinner("뉴스 트렌드 분석 중..."):
+            news_topics = fetch_news_topics(force_refresh=refresh_news)
+        if news_topics:
+            news_cols = st.columns(min(len(news_topics), 3))
+            for idx, nt in enumerate(news_topics):
+                col = news_cols[idx % len(news_cols)]
+                with col:
+                    if st.button(
+                        nt["label"],
+                        key=f"cn_news_{idx}",
+                        use_container_width=True,
+                        help=f"{nt['tag']} | 참고: {nt.get('news_ref', '')}",
+                    ):
+                        st.session_state.cn_pending_topic = nt["topic"]
+                        st.rerun()
+        else:
+            st.caption("뉴스 트렌드를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.")
+    else:
+        if st.button("📰 실시간 뉴스 트렌드 불러오기", key="cn_load_news", use_container_width=True):
+            st.session_state.cn_news_loaded = True
+            st.rerun()
 
     # 현재 계절/절기 표시
     season = detect_season()

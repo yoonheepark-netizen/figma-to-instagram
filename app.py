@@ -24,6 +24,12 @@ except ImportError:
     pass
 
 from caption_generator import generate_caption
+from cardnews_generator import (
+    AGENTS, CATEGORIES, PATTERNS,
+    generate_ideas, evaluate_ideas,
+    generate_full_script, generate_description,
+    load_history, save_history, detect_season,
+)
 from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
@@ -322,6 +328,281 @@ def _fmt_type(post):
     if post.get("media_product_type") == "REELS":
         return "릴스"
     return {"IMAGE": "이미지", "VIDEO": "동영상", "CAROUSEL_ALBUM": "캐러셀"}.get(post.get("media_type", ""), "기타")
+
+
+def render_cardnews_page():
+    """카드뉴스 생성 페이지를 렌더링합니다."""
+    st.markdown("##### 카드뉴스 스크립트 생성")
+    st.caption("10개 에이전트가 경쟁하여 건강 카드뉴스 아이디어를 제안하고, 평가를 통해 Top 스크립트를 선정합니다.")
+
+    # ── 세션 초기화 ──
+    if "cn_ideas" not in st.session_state:
+        st.session_state.cn_ideas = []
+    if "cn_scripts" not in st.session_state:
+        st.session_state.cn_scripts = {}
+    if "cn_descriptions" not in st.session_state:
+        st.session_state.cn_descriptions = {}
+
+    # ── Step 1: 설정 ──
+    st.markdown("---")
+    st.markdown("###### Step 1. 설정")
+
+    col_topic, col_cat, col_pat = st.columns(3)
+    with col_topic:
+        topic_hint = st.text_input(
+            "주제 힌트 (선택)",
+            placeholder="예: 봄철 피로, 수면 부족, 사향...",
+            help="빈칸이면 에이전트가 자율적으로 주제를 선정합니다",
+        )
+    with col_cat:
+        cat_options = ["자동 선택"] + [c["name"] for c in CATEGORIES]
+        selected_cat = st.selectbox("카테고리", cat_options)
+    with col_pat:
+        pat_options = ["자동 선택"] + [p["name"] for p in PATTERNS]
+        selected_pat = st.selectbox("패턴", pat_options)
+
+    # 현재 계절/절기 표시
+    season = detect_season()
+    history = load_history()
+    col_info1, col_info2 = st.columns(2)
+    with col_info1:
+        season_text = f"{season['season_kr']} ({season['theme']})"
+        if season.get("solar_term"):
+            season_text += f" | 절기: {season['solar_term']}"
+        st.info(f"현재 계절: {season_text}")
+    with col_info2:
+        past_count = len(history.get("selected_ideas", []))
+        st.info(f"히스토리: {past_count}개 선정작 (중복 방지 적용)")
+
+    # ── 아이디어 생성 버튼 ──
+    if st.button("아이디어 생성 (10개)", type="primary", use_container_width=True):
+        cat_val = "" if selected_cat == "자동 선택" else selected_cat
+        pat_val = "" if selected_pat == "자동 선택" else selected_pat
+
+        progress_bar = st.progress(0, text="에이전트 투입 중...")
+        status_area = st.empty()
+        agent_status = {}
+
+        def on_progress(agent_name, status):
+            agent_status[agent_name] = status
+            done = len(agent_status)
+            progress_bar.progress(done / len(AGENTS), text=f"{done}/{len(AGENTS)} 에이전트 완료")
+
+        with st.spinner("5개 에이전트가 동시에 아이디어를 생성하고 있습니다..."):
+            ideas = generate_ideas(
+                topic_hint=topic_hint,
+                category=cat_val,
+                pattern=pat_val,
+                progress_callback=on_progress,
+            )
+        progress_bar.progress(1.0, text="아이디어 생성 완료!")
+
+        if not ideas:
+            st.error("아이디어 생성에 실패했습니다. API 키를 확인해주세요.")
+        else:
+            st.success(f"{len(ideas)}개 아이디어 생성 완료! 평가 중...")
+            with st.spinner("10개 아이디어 경쟁 평가 중..."):
+                ideas = evaluate_ideas(ideas)
+            st.session_state.cn_ideas = ideas
+            st.session_state.cn_scripts = {}
+            st.session_state.cn_descriptions = {}
+            st.rerun()
+
+    # ── Step 2: 아이디어 평가 결과 ──
+    ideas = st.session_state.cn_ideas
+    if not ideas:
+        st.caption("아이디어를 생성하면 여기에 결과가 표시됩니다.")
+        return
+
+    st.markdown("---")
+    st.markdown(f"###### Step 2. {len(ideas)}개 아이디어 평가 결과")
+
+    # 요약 테이블
+    table_data = []
+    for idea in ideas:
+        dup_mark = "중복" if idea.get("is_duplicate") else ""
+        table_data.append({
+            "순위": idea.get("rank", "-"),
+            "에이전트": idea.get("agent_name", ""),
+            "제목": idea.get("title", "")[:30],
+            "표지": idea.get("headline", "")[:25],
+            "제품": idea.get("product", ""),
+            "총점": idea.get("total_score", 0),
+            "중복": dup_mark,
+        })
+    st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+    # 상세 보기 (expander)
+    for idea in ideas:
+        rank = idea.get("rank", "?")
+        dup_tag = " [중복]" if idea.get("is_duplicate") else ""
+        with st.expander(f"#{rank} | {idea.get('title', '')}{dup_tag} — {idea.get('total_score', 0)}점"):
+            cols = st.columns(5)
+            labels = ["후킹력", "스토리텔링", "타겟공감도", "브랜드연결", "바이럴"]
+            keys = ["hook_score", "story_score", "empathy_score", "brand_score", "viral_score"]
+            for col, label, key in zip(cols, labels, keys):
+                col.metric(label, f"{idea.get(key, 0)}/10")
+
+            if idea.get("bonus"):
+                st.caption(f"가산점: +{idea['bonus']}")
+            if idea.get("penalty"):
+                st.caption(f"감점: -{idea['penalty']}")
+            if idea.get("eval_comment"):
+                st.caption(f"평가: {idea['eval_comment']}")
+            if idea.get("is_duplicate"):
+                st.warning(f"중복 사유: {idea.get('dup_reason', '')}")
+
+            st.markdown(f"**표지**: {idea.get('headline', '')}")
+            st.markdown(f"**내용1**: {idea.get('content1', '')}")
+            st.markdown(f"**내용2**: {idea.get('content2', '')}")
+            st.markdown(f"**내용3**: {idea.get('content3', '')}")
+            st.markdown(f"**내용4**: {idea.get('content4', '')}")
+            st.markdown(f"**내용5**: {idea.get('content5', '')}")
+            st.markdown(f"**제품**: {idea.get('product', '')} | **패턴**: {idea.get('pattern', '')}")
+            if idea.get("hashtags"):
+                st.caption(" ".join(idea["hashtags"]))
+
+    # ── Step 3: 스크립트 생성 ──
+    st.markdown("---")
+    st.markdown("###### Step 3. 스크립트 생성")
+
+    # 선택 (기본 Top 2)
+    non_dup = [i for i, idea in enumerate(ideas) if not idea.get("is_duplicate")]
+    default_sel = non_dup[:2] if len(non_dup) >= 2 else non_dup[:1]
+
+    select_options = [
+        f"#{idea.get('rank', i+1)} {idea.get('title', '')[:25]} ({idea.get('total_score', 0)}점)"
+        for i, idea in enumerate(ideas)
+        if not idea.get("is_duplicate")
+    ]
+    non_dup_ideas = [idea for idea in ideas if not idea.get("is_duplicate")]
+
+    if not select_options:
+        st.warning("중복이 아닌 아이디어가 없습니다. 다시 생성해주세요.")
+        return
+
+    selected = st.multiselect(
+        "스크립트를 생성할 아이디어 선택",
+        select_options,
+        default=select_options[:min(2, len(select_options))],
+    )
+
+    if st.button("선택 아이디어 스크립트 생성", type="primary"):
+        for sel_text in selected:
+            # 순위 번호 추출
+            rank_match = re.match(r"#(\d+)", sel_text)
+            if not rank_match:
+                continue
+            rank = int(rank_match.group(1))
+            idea = next((x for x in ideas if x.get("rank") == rank), None)
+            if not idea:
+                continue
+
+            with st.spinner(f"#{rank} '{idea.get('title', '')[:20]}...' 스크립트 생성 중..."):
+                script = generate_full_script(idea)
+                if script:
+                    st.session_state.cn_scripts[rank] = script
+                    desc = generate_description(script, idea)
+                    st.session_state.cn_descriptions[rank] = desc
+                    st.success(f"#{rank} 스크립트 + Description 생성 완료")
+                else:
+                    st.error(f"#{rank} 스크립트 생성 실패")
+        st.rerun()
+
+    # ── 스크립트 결과 표시 ──
+    scripts = st.session_state.cn_scripts
+    descriptions = st.session_state.cn_descriptions
+
+    if scripts:
+        st.markdown("---")
+        st.markdown("###### 완성된 스크립트")
+
+        tabs = st.tabs([f"#{rank}위 스크립트" for rank in sorted(scripts.keys())])
+        for tab, rank in zip(tabs, sorted(scripts.keys())):
+            with tab:
+                script = scripts[rank]
+                idea = next((x for x in ideas if x.get("rank") == rank), {})
+
+                st.markdown(f"**{idea.get('title', '')}** | {idea.get('agent_name', '')} | {idea.get('total_score', 0)}점")
+
+                # 7장 스크립트
+                st.markdown("**카드뉴스 스크립트 (7장)**")
+                card_data = [
+                    {"카드": "#1 표지", "스크립트": script.get("cover", "")},
+                    {"카드": "#2 내용1", "스크립트": script.get("content1", "")},
+                    {"카드": "#3 내용2", "스크립트": script.get("content2", "")},
+                    {"카드": "#4 내용3", "스크립트": script.get("content3", "")},
+                    {"카드": "#5 내용4", "스크립트": script.get("content4", "")},
+                    {"카드": "#6 내용5", "스크립트": script.get("content5", "")},
+                    {"카드": "#7 클로징", "스크립트": script.get("content6", "")},
+                ]
+                st.dataframe(card_data, use_container_width=True, hide_index=True)
+
+                # 이미지 프롬프트
+                img_prompts = script.get("image_prompts", {})
+                if img_prompts:
+                    with st.expander("이미지 프롬프트 (AI 이미지 생성용)"):
+                        prompt_labels = {
+                            "cover": "#1 표지",
+                            "content1": "#2 내용1",
+                            "content2": "#3 내용2",
+                            "content3": "#4 내용3",
+                            "content4": "#5 내용4",
+                            "content5": "#6 내용5",
+                        }
+                        for key, label in prompt_labels.items():
+                            p = img_prompts.get(key, "")
+                            if p:
+                                st.markdown(f"**{label}**")
+                                st.code(p, language=None)
+
+                # Description Mention
+                desc = descriptions.get(rank, "")
+                if desc:
+                    with st.expander("Instagram Description Mention"):
+                        st.text_area(
+                            "캡션 (복사용)",
+                            value=desc,
+                            height=400,
+                            key=f"cn_desc_{rank}",
+                        )
+                        st.caption(f"글자수: {len(desc)} / 2,200자")
+
+                # 복사용 JSON
+                col_dl, col_save = st.columns(2)
+                with col_dl:
+                    export = {
+                        "idea": {
+                            "title": idea.get("title", ""),
+                            "agent": idea.get("agent", ""),
+                            "product": idea.get("product", ""),
+                            "pattern": idea.get("pattern", ""),
+                            "total_score": idea.get("total_score", 0),
+                        },
+                        "script": script,
+                        "description": desc,
+                    }
+                    st.download_button(
+                        "JSON 다운로드",
+                        data=json.dumps(export, ensure_ascii=False, indent=2),
+                        file_name=f"cardnews_{rank}_{datetime.now().strftime('%y%m%d')}.json",
+                        mime="application/json",
+                        key=f"cn_dl_{rank}",
+                    )
+                with col_save:
+                    if st.button(f"히스토리 저장 (#{rank})", key=f"cn_save_{rank}"):
+                        save_entry = {
+                            "date": datetime.now().strftime("%Y-%m-%d"),
+                            "rank": rank,
+                            "agent": idea.get("agent", ""),
+                            "title": idea.get("title", ""),
+                            "headline": idea.get("headline", script.get("cover", "")),
+                            "product": idea.get("product", ""),
+                            "pattern": idea.get("pattern", ""),
+                            "keywords": idea.get("keywords", []),
+                        }
+                        save_history(save_entry)
+                        st.success(f"#{rank} 아이디어가 히스토리에 저장되었습니다.")
 
 
 def render_insights_page(account):
@@ -1868,7 +2149,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 with st.sidebar:
     page = st.radio(
         "메뉴",
-        ["게시물 발행", "콘텐츠 인사이트"],
+        ["게시물 발행", "카드뉴스 생성", "콘텐츠 인사이트"],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -2102,6 +2383,9 @@ if not accounts:
 # 페이지 라우팅
 if page == "콘텐츠 인사이트":
     render_insights_page(selected_account)
+    st.stop()
+elif page == "카드뉴스 생성":
+    render_cardnews_page()
     st.stop()
 
 

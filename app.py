@@ -348,15 +348,13 @@ def render_cardnews_page():
     st.markdown("---")
     st.markdown("###### Step 1. 설정")
 
-    # 세션에 선택된 주제 힌트 저장
-    if "cn_topic_hint" not in st.session_state:
-        st.session_state.cn_topic_hint = ""
+    if "cn_topic_input" not in st.session_state:
+        st.session_state.cn_topic_input = ""
 
     col_topic, col_cat, col_pat = st.columns(3)
     with col_topic:
         topic_hint = st.text_input(
             "주제 힌트 (선택)",
-            value=st.session_state.cn_topic_hint,
             placeholder="예: 봄철 피로, 수면 부족, 사향...",
             help="빈칸이면 에이전트가 자율적으로 주제를 선정합니다",
             key="cn_topic_input",
@@ -382,7 +380,7 @@ def render_cardnews_page():
                     use_container_width=True,
                     help=f"태그: {sug['tag']}",
                 ):
-                    st.session_state.cn_topic_hint = sug["topic"]
+                    st.session_state.cn_topic_input = sug["topic"]
                     st.rerun()
 
     # 현재 계절/절기 표시

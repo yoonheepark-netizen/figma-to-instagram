@@ -2190,7 +2190,10 @@ with tab_pencil:
     col_load, col_info = st.columns([1, 3])
     with col_load:
         if st.button("불러오기", use_container_width=True, key="load_pencil"):
-            gist_id = pencil_gist_id.strip().rstrip("/").split("/")[-1] if pencil_gist_id.strip() else ""
+            gist_id = pencil_gist_id.strip().rstrip("/") if pencil_gist_id.strip() else ""
+            # "owner/gist_id" 형식이 아니면 마지막 segment만 추출
+            if "/" not in gist_id:
+                gist_id = gist_id.split("/")[-1]
             if not gist_id:
                 st.error("사이드바에서 Pencil Gist ID를 먼저 설정해주세요.")
             else:

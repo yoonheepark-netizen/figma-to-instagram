@@ -3,6 +3,11 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# 모듈 레벨 캐시: {gist_id: manifest_dict}
+_manifest_cache = {}
+# owner 캐시: {gist_id: owner_login}
+_owner_cache = {}
+
 
 class PencilClient:
     """GitHub Gist 매니페스트를 통한 Pencil.dev 이미지 클라이언트.
@@ -54,25 +59,56 @@ class PencilClient:
             raise ValueError(f"시리즈 '{series_name}'을(를) 찾을 수 없습니다.")
         return [img["url"] for img in series_data.get("images", [])]
 
+    def clear_cache(self, gist_id=None):
+        """캐시를 초기화합니다. gist_id 지정 시 해당 항목만 삭제."""
+        if gist_id:
+            _manifest_cache.pop(gist_id, None)
+        else:
+            _manifest_cache.clear()
+
     def _fetch_manifest(self, gist_id):
         """GitHub Gist에서 매니페스트 JSON을 가져옵니다.
 
         gist_id 형식:
             - "gist_id" → GitHub API로 owner를 자동 조회
             - "owner/gist_id" → 직접 raw URL 생성
+
+        캐싱: 동일 gist_id는 세션 내 재요청하지 않습니다.
+        Rate limit 대응: GitHub API 403 시 캐시된 owner로 재시도합니다.
         """
+        # 캐시 히트
+        if gist_id in _manifest_cache:
+            logger.info(f"  Gist 매니페스트 캐시 히트: {gist_id}")
+            return _manifest_cache[gist_id]
+
         if "/" in gist_id:
             owner, gid = gist_id.split("/", 1)
             url = f"{self.GIST_RAW_BASE}/{owner}/{gid}/raw/{self.MANIFEST_FILE}"
         else:
-            # API로 owner를 조회한 뒤 raw URL 구성
-            api_url = f"https://api.github.com/gists/{gist_id}"
-            api_resp = requests.get(api_url, timeout=10)
-            api_resp.raise_for_status()
-            owner = api_resp.json().get("owner", {}).get("login", "")
+            owner = _owner_cache.get(gist_id)
+            if not owner:
+                try:
+                    api_url = f"https://api.github.com/gists/{gist_id}"
+                    api_resp = requests.get(api_url, timeout=10)
+                    api_resp.raise_for_status()
+                    owner = api_resp.json().get("owner", {}).get("login", "")
+                    _owner_cache[gist_id] = owner
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 403:
+                        raise RuntimeError(
+                            "GitHub API rate limit 초과입니다. "
+                            "Gist ID를 'owner/gist_id' 형식으로 입력하면 "
+                            "API 호출 없이 직접 접근할 수 있습니다. "
+                            f"(예: 'yoonheepark-netizen/{gist_id}')"
+                        ) from e
+                    raise
             url = f"{self.GIST_RAW_BASE}/{owner}/{gist_id}/raw/{self.MANIFEST_FILE}"
 
         logger.info(f"  Gist 매니페스트 로드: {gist_id}")
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-        return resp.json()
+        manifest = resp.json()
+
+        # 캐시 저장
+        _manifest_cache[gist_id] = manifest
+        return manifest

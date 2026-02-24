@@ -348,16 +348,23 @@ def render_cardnews_page():
     st.markdown("---")
     st.markdown("###### Step 1. 설정")
 
-    if "cn_topic_input" not in st.session_state:
-        st.session_state.cn_topic_input = ""
+    # 추천 주제 클릭 → 다음 렌더링에서 text_input에 반영
+    if "cn_pending_topic" not in st.session_state:
+        st.session_state.cn_pending_topic = None
+
+    # pending 값이 있으면 위젯 렌더 전에 적용
+    default_topic = ""
+    if st.session_state.cn_pending_topic is not None:
+        default_topic = st.session_state.cn_pending_topic
+        st.session_state.cn_pending_topic = None
 
     col_topic, col_cat, col_pat = st.columns(3)
     with col_topic:
         topic_hint = st.text_input(
             "주제 힌트 (선택)",
+            value=default_topic,
             placeholder="예: 봄철 피로, 수면 부족, 사향...",
             help="빈칸이면 에이전트가 자율적으로 주제를 선정합니다",
-            key="cn_topic_input",
         )
     with col_cat:
         cat_options = ["자동 선택"] + [c["name"] for c in CATEGORIES]
@@ -380,7 +387,7 @@ def render_cardnews_page():
                     use_container_width=True,
                     help=f"태그: {sug['tag']}",
                 ):
-                    st.session_state.cn_topic_input = sug["topic"]
+                    st.session_state.cn_pending_topic = sug["topic"]
                     st.rerun()
 
     # 현재 계절/절기 표시

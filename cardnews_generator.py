@@ -263,7 +263,7 @@ def suggest_topics() -> list[dict]:
 # ═══════════════════════════════════════════════════════════
 
 # 모듈 레벨 캐시 (Streamlit 리런마다 재호출 방지)
-_news_cache: dict = {"data": [], "timestamp": 0.0}
+_news_cache: dict = {"data": [], "headlines": {}, "timestamp": 0.0}
 _NEWS_CACHE_TTL = 1800  # 30분
 
 _NEWS_FEEDS = [
@@ -356,11 +356,15 @@ def fetch_news_topics(force_refresh: bool = False) -> list[dict]:
         return _news_cache["data"]
 
     all_topics: list[dict] = []
+    all_headlines: dict[str, list[str]] = {}
 
     for feed in _NEWS_FEEDS:
         headlines = _fetch_rss_headlines(feed["url"])
         if not headlines:
             continue
+
+        # 원본 헤드라인 저장 (에이전트에 컨텍스트로 전달용)
+        all_headlines[feed["tag"]] = headlines
 
         transformed = _transform_headlines_to_topics(headlines, feed["name"])
         for item in transformed:
@@ -373,8 +377,34 @@ def fetch_news_topics(force_refresh: bool = False) -> list[dict]:
                     "news_ref": item.get("news_ref", ""),
                 })
 
-    _news_cache = {"data": all_topics, "timestamp": now}
+    _news_cache = {"data": all_topics, "headlines": all_headlines, "timestamp": now}
     return all_topics
+
+
+def get_news_context(tag: str = "") -> str:
+    """캐시된 뉴스 헤드라인을 에이전트 컨텍스트 문자열로 반환
+
+    Args:
+        tag: 특정 피드 태그 (빈 문자열이면 전체)
+    """
+    headlines = _news_cache.get("headlines", {})
+    if not headlines:
+        return ""
+
+    parts = ["## 참고 뉴스 기사 (이 뉴스 트렌드를 반드시 반영하세요!)"]
+    parts.append("아래 실제 뉴스 헤드라인을 참고하여, 뉴스 이슈와 한의학을 연결한 아이디어를 만드세요.")
+    parts.append("연예인 이름은 직접 사용하지 말고 현상/트렌드로 변환하세요.\n")
+
+    for feed_tag, feed_headlines in headlines.items():
+        if tag and feed_tag != tag:
+            continue
+        label = "건강 기사" if feed_tag == "건강뉴스" else "연예 기사"
+        parts.append(f"### {label}")
+        for h in feed_headlines[:8]:
+            parts.append(f"- {h}")
+        parts.append("")
+
+    return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -646,6 +676,7 @@ def generate_ideas(
     topic_hint: str = "",
     category: str = "",
     pattern: str = "",
+    news_tag: str = "",
     progress_callback=None,
 ) -> list[dict]:
     """5개 에이전트 동시 실행 → 10개 아이디어 반환
@@ -654,6 +685,7 @@ def generate_ideas(
         topic_hint: 주제 힌트 (빈 문자열이면 에이전트 자율)
         category: 카테고리 이름 (빈 문자열이면 자동)
         pattern: 패턴 이름 (빈 문자열이면 자동)
+        news_tag: 뉴스 피드 태그 (건강뉴스/연예뉴스/빈 문자열)
         progress_callback: fn(agent_name, status) 진행 콜백
     """
     season = detect_season()
@@ -671,6 +703,12 @@ def generate_ideas(
         parts.append(f"절기: {season['solar_term']}")
     if topic_hint:
         parts.append(f"주제 힌트: {topic_hint}")
+
+    # 실시간 뉴스 컨텍스트 주입
+    news_ctx = get_news_context(tag=news_tag)
+    if news_ctx:
+        parts.append(f"\n{news_ctx}")
+
     if blacklist:
         parts.append(f"\n{blacklist}")
 

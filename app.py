@@ -29,7 +29,7 @@ from cardnews_generator import (
     generate_ideas, evaluate_ideas,
     generate_full_script, generate_description,
     load_history, save_history, detect_season,
-    suggest_topics, fetch_news_topics,
+    suggest_topics, fetch_news_topics, get_news_context,
 )
 from figma_client import FigmaClient
 from image_host import ImageHost
@@ -351,6 +351,8 @@ def render_cardnews_page():
     # 추천 주제 클릭 → 다음 렌더링에서 text_input에 반영
     if "cn_pending_topic" not in st.session_state:
         st.session_state.cn_pending_topic = None
+    if "cn_news_tag" not in st.session_state:
+        st.session_state.cn_news_tag = ""
 
     # pending 값이 있으면 위젯 렌더 전에 적용
     default_topic = ""
@@ -388,6 +390,7 @@ def render_cardnews_page():
                     help=f"태그: {sug['tag']}",
                 ):
                     st.session_state.cn_pending_topic = sug["topic"]
+                    st.session_state.cn_news_tag = ""
                     st.rerun()
 
     # ── 실시간 뉴스 트렌드 (건강/연예 기사) ──
@@ -418,6 +421,7 @@ def render_cardnews_page():
                         help=f"{nt['tag']} | 참고: {nt.get('news_ref', '')}",
                     ):
                         st.session_state.cn_pending_topic = nt["topic"]
+                        st.session_state.cn_news_tag = nt["tag"]
                         st.rerun()
         else:
             st.caption("뉴스 트렌드를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.")
@@ -439,6 +443,14 @@ def render_cardnews_page():
         past_count = len(history.get("selected_ideas", []))
         st.info(f"히스토리: {past_count}개 선정작 (중복 방지 적용)")
 
+    # ── 뉴스 컨텍스트 표시 ──
+    news_tag_val = st.session_state.get("cn_news_tag", "")
+    if news_tag_val:
+        news_ctx_preview = get_news_context(tag=news_tag_val)
+        if news_ctx_preview:
+            label = "건강 기사" if news_tag_val == "건강뉴스" else "연예 기사"
+            st.success(f"📰 **{label}** 뉴스 컨텍스트가 아이디어 생성에 반영됩니다.")
+
     # ── 아이디어 생성 버튼 ──
     if st.button("아이디어 생성 (10개)", type="primary", use_container_width=True):
         cat_val = "" if selected_cat == "자동 선택" else selected_cat
@@ -458,6 +470,7 @@ def render_cardnews_page():
                 topic_hint=topic_hint,
                 category=cat_val,
                 pattern=pat_val,
+                news_tag=news_tag_val,
                 progress_callback=on_progress,
             )
         progress_bar.progress(1.0, text="아이디어 생성 완료!")

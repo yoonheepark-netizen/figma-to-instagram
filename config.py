@@ -33,7 +33,8 @@ class Config:
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
     PENCIL_GIST_ID = os.getenv("PENCIL_GIST_ID")
 
-    # Anthropic (캡션 생성)
+    # AI 캡션 생성 (Groq 무료 → Anthropic 폴백)
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
     # API versions

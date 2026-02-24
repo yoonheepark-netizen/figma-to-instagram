@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 from config import Config
 
@@ -16,7 +18,9 @@ class FigmaClient:
         """Figma 파일의 모든 최상위 프레임 목록을 반환합니다."""
         file_key = file_key or Config.FIGMA_FILE_KEY
         url = f"{self.base_url}/files/{file_key}"
-        resp = requests.get(url, headers=self.headers, params={"depth": 2})
+        resp = requests.get(
+            url, headers=self.headers, params={"depth": 2}, timeout=30
+        )
         resp.raise_for_status()
 
         frames = []
@@ -32,9 +36,10 @@ class FigmaClient:
                     )
         return frames
 
-    def export_images(self, node_ids=None, fmt="png", scale=2, batch_size=3):
+    def export_images(self, node_ids=None, fmt="png", scale=2, batch_size=10):
         """지정된 노드들을 이미지로 export합니다. {node_id: temp_url} dict를 반환합니다.
-        타임아웃 방지를 위해 batch_size개씩 나누어 요청합니다.
+        Figma API는 한 번에 최대 ~50개 노드를 처리할 수 있으므로
+        batch_size=10으로 묶어 호출합니다.
         """
         node_ids = node_ids or Config.FIGMA_NODE_IDS
         url = f"{self.base_url}/images/{Config.FIGMA_FILE_KEY}"
@@ -44,14 +49,21 @@ class FigmaClient:
             batch = node_ids[i : i + batch_size]
             ids_str = ",".join(batch)
             params = {"ids": ids_str, "format": fmt, "scale": scale}
-            logger.info(f"  배치 {i // batch_size + 1}: {len(batch)}개 노드 export 중...")
+            logger.info(
+                f"  배치 {i // batch_size + 1}: {len(batch)}개 노드 export 중..."
+            )
 
-            resp = requests.get(url, headers=self.headers, params=params)
+            resp = requests.get(
+                url, headers=self.headers, params=params, timeout=30
+            )
             resp.raise_for_status()
 
             images = resp.json().get("images", {})
             all_images.update(images)
-            time.sleep(1)
+
+            # 배치가 2개 이상일 때만 짧은 대기
+            if i + batch_size < len(node_ids):
+                time.sleep(0.3)
 
         failed = [nid for nid, u in all_images.items() if u is None]
         if failed:
@@ -67,7 +79,7 @@ class FigmaClient:
         ids_str = ",".join(node_ids)
         url = f"{self.base_url}/files/{file_key}/nodes"
         params = {"ids": ids_str}
-        resp = requests.get(url, headers=self.headers, params=params)
+        resp = requests.get(url, headers=self.headers, params=params, timeout=30)
         resp.raise_for_status()
         nodes = resp.json().get("nodes", {})
 
@@ -91,24 +103,32 @@ class FigmaClient:
             FigmaClient._collect_texts(child, texts)
 
     def download_images(self, image_urls, output_dir="downloads"):
-        """export된 임시 URL에서 로컬로 다운로드합니다. 파일 경로 리스트를 반환합니다."""
+        """export된 임시 URL에서 로컬로 병렬 다운로드합니다."""
         os.makedirs(output_dir, exist_ok=True)
-        downloaded = []
 
-        for node_id, url in image_urls.items():
+        def _download_one(item):
+            node_id, url = item
             if url is None:
-                continue
+                return None
             safe_name = node_id.replace(":", "-")
             filepath = os.path.join(output_dir, f"frame_{safe_name}.png")
-
-            resp = requests.get(url, stream=True)
+            resp = requests.get(url, stream=True, timeout=30)
             resp.raise_for_status()
             with open(filepath, "wb") as f:
                 for chunk in resp.iter_content(8192):
                     f.write(chunk)
-
-            downloaded.append(filepath)
             logger.info(f"  다운로드 완료: {filepath}")
-            time.sleep(0.2)
+            return filepath
+
+        downloaded = []
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {
+                pool.submit(_download_one, item): item
+                for item in image_urls.items()
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    downloaded.append(result)
 
         return downloaded

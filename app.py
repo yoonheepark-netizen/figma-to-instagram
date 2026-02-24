@@ -29,6 +29,7 @@ from cardnews_generator import (
     generate_ideas, evaluate_ideas,
     generate_full_script, generate_description,
     load_history, save_history, detect_season,
+    suggest_topics,
 )
 from figma_client import FigmaClient
 from image_host import ImageHost
@@ -347,12 +348,18 @@ def render_cardnews_page():
     st.markdown("---")
     st.markdown("###### Step 1. 설정")
 
+    # 세션에 선택된 주제 힌트 저장
+    if "cn_topic_hint" not in st.session_state:
+        st.session_state.cn_topic_hint = ""
+
     col_topic, col_cat, col_pat = st.columns(3)
     with col_topic:
         topic_hint = st.text_input(
             "주제 힌트 (선택)",
+            value=st.session_state.cn_topic_hint,
             placeholder="예: 봄철 피로, 수면 부족, 사향...",
             help="빈칸이면 에이전트가 자율적으로 주제를 선정합니다",
+            key="cn_topic_input",
         )
     with col_cat:
         cat_options = ["자동 선택"] + [c["name"] for c in CATEGORIES]
@@ -360,6 +367,23 @@ def render_cardnews_page():
     with col_pat:
         pat_options = ["자동 선택"] + [p["name"] for p in PATTERNS]
         selected_pat = st.selectbox("패턴", pat_options)
+
+    # ── 추천 주제 (시즌/절기/트렌드) ──
+    suggestions = suggest_topics()
+    if suggestions:
+        st.caption("추천 주제 — 클릭하면 주제 힌트에 자동 입력됩니다")
+        cols = st.columns(min(len(suggestions), 4))
+        for idx, sug in enumerate(suggestions):
+            col = cols[idx % len(cols)]
+            with col:
+                if st.button(
+                    sug["label"],
+                    key=f"cn_sug_{idx}",
+                    use_container_width=True,
+                    help=f"태그: {sug['tag']}",
+                ):
+                    st.session_state.cn_topic_hint = sug["topic"]
+                    st.rerun()
 
     # 현재 계절/절기 표시
     season = detect_season()
@@ -441,7 +465,7 @@ def render_cardnews_page():
             labels = ["후킹력", "스토리텔링", "타겟공감도", "브랜드연결", "바이럴"]
             keys = ["hook_score", "story_score", "empathy_score", "brand_score", "viral_score"]
             for col, label, key in zip(cols, labels, keys):
-                col.metric(label, f"{idea.get(key, 0)}/10")
+                col.metric(label, f"{idea.get(key, 0)}/20")
 
             if idea.get("bonus"):
                 st.caption(f"가산점: +{idea['bonus']}")

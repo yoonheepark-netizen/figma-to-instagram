@@ -144,16 +144,22 @@ _AI_PROMPT = """당신은 한의 브랜드 '수壽(thesoo.co)'의 전문 콘텐�
 카드뉴스 이미지 텍스트를 분석하고, 해당 주제에 대한 의학 논문·보도자료·전문 기사의 내용을 참고하여 인스타그램 캡션을 작성합니다.
 
 ## 수壽 브랜드 가이드
+- 반드시 한국어(한글)로만 작성. 한자·일본어·중국어 절대 금지 (브랜드명 수壽 제외)
 - 이모지 절대 사용 금지
 - 간결하고 신뢰감 있는 어투 (존댓말)
-- 본문은 3~4개의 짧은 문단으로 구성 (각 문단 2~3줄)
+- 본문은 3~4개의 짧은 문단 (각 문단 2~3줄, 한 줄 최대 20자)
+- 문단 사이는 빈 줄(\\n\\n)로 구분
 - 의학적·과학적 근거를 자연스럽게 포함 (출처명 언급 가능: 대한OO학회, OO연구 등)
 - 마지막 문단에서 수壽 브랜드와 자연스럽게 연결
-- 수壽 제품: 공진단(기력 회복), 경옥고(호흡기·면역), 녹용(뇌건강·보양)
+- 수壽 제품: 공진단(기력 회복), 경옥고(호흡기·면역·피로회복), 녹용(뇌건강·보양)
+
+## 좋은 캡션 예시
+hook: "올바른 보행이 건강의 시작입니다"
+body: "걷기는 누구나 할 수 있는\\n가장 기본적인 운동이지만\\n잘못된 보행 습관은 오히려\\n무릎과 허리에 부담을 줄 수 있습니다.\\n\\n대한스포츠의학회에 따르면\\n올바른 보행 자세는\\n관절 건강뿐 아니라\\n전신 건강에 큰 영향을 줍니다.\\n\\n수壽의 경옥고와 함께\\n건강한 걸음을 시작해 보세요."
 
 ## 출력 형식
 반드시 아래 JSON만 출력하세요. 다른 텍스트 없이.
-{"hook": "한 줄 헤드라인 (15자 내외, 임팩트 있게)", "body": "본문 (3~4 문단, \\n으로 줄바꿈)"}"""
+{"hook": "한 줄 헤드라인 (15자 내외)", "body": "본문 (3~4 문단, \\n 줄바꿈, \\n\\n 문단구분)"}"""
 
 
 def _make_cache_key(image_texts, tone):
@@ -179,6 +185,24 @@ def _build_user_prompt(image_texts, topics, tone):
     )
 
 
+# 한자 → 한글 치환 맵 (LLM이 간혹 섞어 쓰는 한자)
+_CJK_REPLACEMENTS = {
+    "決定": "결정", "重要": "중요", "健康": "건강", "效果": "효과",
+    "生活": "생활", "必要": "필요", "治療": "치료", "症狀": "증상",
+    "運動": "운동", "免疫": "면역", "改善": "개선", "强化": "강화",
+    "增進": "증진", "回復": "회복", "疲勞": "피로", "管理": "관리",
+}
+
+
+def _sanitize_korean(text):
+    """LLM 출력에서 한자·비한글 문자를 제거합니다."""
+    for cjk, kor in _CJK_REPLACEMENTS.items():
+        text = text.replace(cjk, kor)
+    # 남은 CJK 한자(壽 제외) 제거
+    text = re.sub(r"(?<!수)[一-龥]", "", text)
+    return text
+
+
 def _parse_ai_response(text):
     """AI 응답에서 hook/body JSON을 파싱합니다."""
     text = text.strip()
@@ -187,8 +211,8 @@ def _parse_ai_response(text):
         text = text.replace("```", "").strip()
 
     data = json.loads(text)
-    hook = data.get("hook", "").strip()
-    body = data.get("body", "").strip()
+    hook = _sanitize_korean(data.get("hook", "").strip())
+    body = _sanitize_korean(data.get("body", "").strip())
 
     if not hook or not body:
         return None

@@ -2220,6 +2220,11 @@ with tab_pencil:
             format_func=lambda x: f"{x} ({next(s['count'] for s in series_list if s['name'] == x)}장)",
         )
 
+        # 선택 해제된 이미지셋을 pencil_series에서 제거
+        for old_name in list(st.session_state.pencil_series.keys()):
+            if old_name not in selected_pencil:
+                del st.session_state.pencil_series[old_name]
+
         if selected_pencil:
             st.info(f"{len(selected_pencil)}개 이미지셋 선택됨")
 
@@ -2245,6 +2250,8 @@ with tab_pencil:
                     st.caption(f"{len(selected_images)}장 선택" + (" (단일 이미지)" if len(selected_images) == 1 else ""))
                     if selected_images:
                         st.session_state.pencil_series[sname] = [img["url"] for img in selected_images]
+                    elif sname in st.session_state.pencil_series:
+                        del st.session_state.pencil_series[sname]
 
 # ── Tab 3: 이미지 업로드 ──
 with tab_upload:

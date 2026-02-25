@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -27,9 +28,12 @@ from caption_generator import generate_caption
 from cardnews_generator import (
     AGENTS, CATEGORIES, PATTERNS,
     generate_ideas, evaluate_ideas,
-    generate_full_script, generate_description,
+    generate_full_script, generate_description, generate_description_first,
     load_history, save_history, detect_season,
     suggest_topics, fetch_news_topics, get_news_context,
+    extract_image_keywords, search_unsplash,
+    list_gdrive_images, search_gdrive_images,
+    auto_search_card_images, generate_all_card_images,
 )
 from figma_client import FigmaClient
 from image_host import ImageHost
@@ -334,7 +338,7 @@ def _fmt_type(post):
 def render_cardnews_page():
     """카드뉴스 생성 페이지를 렌더링합니다."""
     st.markdown("##### 카드뉴스 스크립트 생성")
-    st.caption("10개 에이전트가 경쟁하여 건강 카드뉴스 아이디어를 제안하고, 평가를 통해 Top 스크립트를 선정합니다.")
+    st.caption("다양한 관점의 카드뉴스 아이디어를 생성하고, 평가를 통해 Top 스크립트를 선정합니다.")
 
     # ── 세션 초기화 ──
     if "cn_ideas" not in st.session_state:
@@ -348,23 +352,24 @@ def render_cardnews_page():
     st.markdown("---")
     st.markdown("###### Step 1. 설정")
 
-    # 추천 주제 클릭 → 다음 렌더링에서 text_input에 반영
-    if "cn_pending_topic" not in st.session_state:
-        st.session_state.cn_pending_topic = None
+    # ── 상태 초기화 ──
     if "cn_news_tag" not in st.session_state:
         st.session_state.cn_news_tag = ""
+    if "cn_news_loaded" not in st.session_state:
+        st.session_state.cn_news_loaded = False
+    if "cn_news_topics" not in st.session_state:
+        st.session_state.cn_news_topics = []
 
-    # pending 값이 있으면 위젯 렌더 전에 적용
-    default_topic = ""
-    if st.session_state.cn_pending_topic is not None:
-        default_topic = st.session_state.cn_pending_topic
-        st.session_state.cn_pending_topic = None
+    # on_click 콜백: 추천 주제 / 뉴스 토픽 클릭 시 text_input에 직접 반영
+    def _set_topic(topic: str, news_tag: str = ""):
+        st.session_state["cn_topic_input"] = topic
+        st.session_state.cn_news_tag = news_tag
 
     col_topic, col_cat, col_pat = st.columns(3)
     with col_topic:
         topic_hint = st.text_input(
             "주제 힌트 (선택)",
-            value=default_topic,
+            key="cn_topic_input",
             placeholder="예: 봄철 피로, 수면 부족, 사향...",
             help="빈칸이면 에이전트가 자율적으로 주제를 선정합니다",
         )
@@ -375,60 +380,63 @@ def render_cardnews_page():
         pat_options = ["자동 선택"] + [p["name"] for p in PATTERNS]
         selected_pat = st.selectbox("패턴", pat_options)
 
-    # ── 추천 주제 (시즌/절기/트렌드) ──
-    suggestions = suggest_topics()
-    if suggestions:
-        st.caption("📌 추천 주제 — 클릭하면 주제 힌트에 자동 입력됩니다")
-        cols = st.columns(min(len(suggestions), 4))
-        for idx, sug in enumerate(suggestions):
-            col = cols[idx % len(cols)]
-            with col:
-                if st.button(
-                    sug["label"],
-                    key=f"cn_sug_{idx}",
-                    use_container_width=True,
-                    help=f"태그: {sug['tag']}",
-                ):
-                    st.session_state.cn_pending_topic = sug["topic"]
-                    st.session_state.cn_news_tag = ""
-                    st.rerun()
-
-    # ── 실시간 뉴스 트렌드 (건강/연예 기사) ──
-    if "cn_news_loaded" not in st.session_state:
-        st.session_state.cn_news_loaded = False
-
-    news_col1, news_col2 = st.columns([6, 1])
-    with news_col1:
-        st.caption("📰 실시간 뉴스 트렌드 — 건강/연예 기사에서 추출한 주제")
-    with news_col2:
-        refresh_news = st.button("🔄 새로고침", key="cn_news_refresh")
-
-    if refresh_news:
-        st.session_state.cn_news_loaded = True
-
-    if st.session_state.cn_news_loaded:
-        with st.spinner("뉴스 트렌드 분석 중..."):
-            news_topics = fetch_news_topics(force_refresh=refresh_news)
-        if news_topics:
-            news_cols = st.columns(min(len(news_topics), 3))
-            for idx, nt in enumerate(news_topics):
-                col = news_cols[idx % len(news_cols)]
-                with col:
-                    if st.button(
-                        nt["label"],
-                        key=f"cn_news_{idx}",
-                        use_container_width=True,
-                        help=f"{nt['tag']} | 참고: {nt.get('news_ref', '')}",
-                    ):
-                        st.session_state.cn_pending_topic = nt["topic"]
-                        st.session_state.cn_news_tag = nt["tag"]
-                        st.rerun()
-        else:
-            st.caption("뉴스 트렌드를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.")
-    else:
-        if st.button("📰 실시간 뉴스 트렌드 불러오기", key="cn_load_news", use_container_width=True):
-            st.session_state.cn_news_loaded = True
+    # ── 추천 주제 (시즌/절기/트렌드/뉴스 통합) ──
+    sug_header_col, sug_refresh_col = st.columns([6, 1])
+    with sug_header_col:
+        st.caption("📌 추천 주제 — 점수순 · 클릭하면 주제 힌트에 자동 입력")
+    with sug_refresh_col:
+        if st.button("🔄", key="cn_refresh_all", help="추천 주제 + 뉴스 새로고침"):
+            from cardnews_generator import _news_cache
+            _news_cache["timestamp"] = 0
+            _news_cache["fast_topics"] = []
             st.rerun()
+
+    suggestions = suggest_topics(include_news=True)
+    if suggestions:
+        # 2행 x 4열 카드 레이아웃 (최대 8개 표시)
+        display = suggestions[:8]
+        num_cols = 4
+        for row_start in range(0, len(display), num_cols):
+            row_items = display[row_start:row_start + num_cols]
+            cols = st.columns(num_cols)
+            for idx_in_row, sug in enumerate(row_items):
+                global_idx = row_start + idx_in_row
+                with cols[idx_in_row]:
+                    with st.container(border=True):
+                        # 상단: 태그 + 점수 바
+                        score = sug.get("score", 0)
+                        src = sug.get("source_type", "")
+                        # 소스별 이모지
+                        src_emoji = {"monthly": "📅", "solar": "🗓️", "season": "🌿",
+                                     "trend": "🔥", "news": "📰"}.get(src, "📌")
+                        tag_short = sug["tag"][:8]
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                            f"<span style='font-size:12px;color:#888'>{src_emoji} {tag_short}</span>"
+                            f"<span style='font-size:13px;font-weight:bold;color:{'#e74c3c' if score >= 80 else '#f39c12' if score >= 60 else '#95a5a6'}'>"
+                            f"{score}점</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        # 제목
+                        topic_display = sug["topic"][:28] + ("..." if len(sug["topic"]) > 28 else "")
+                        st.markdown(f"**{topic_display}**")
+                        # 추천 사유
+                        reason = sug.get("reason", "")
+                        if reason:
+                            st.caption(reason[:35])
+                        # 제품 연결
+                        product = sug.get("product", "")
+                        if product and product != "없음":
+                            st.caption(f"→ {product}")
+                        # 선택 버튼
+                        news_tag = sug["tag"] if src == "news" else ""
+                        st.button(
+                            "선택",
+                            key=f"cn_sug_{global_idx}",
+                            use_container_width=True,
+                            on_click=_set_topic,
+                            args=(sug["topic"], news_tag),
+                        )
 
     # 현재 계절/절기 표시
     season = detect_season()
@@ -445,27 +453,30 @@ def render_cardnews_page():
 
     # ── 뉴스 컨텍스트 표시 ──
     news_tag_val = st.session_state.get("cn_news_tag", "")
-    if news_tag_val:
-        news_ctx_preview = get_news_context(tag=news_tag_val)
-        if news_ctx_preview:
-            label = "건강 기사" if news_tag_val == "건강뉴스" else "연예 기사"
+    news_ctx_preview = get_news_context(tag=news_tag_val)
+    if news_ctx_preview:
+        if news_tag_val:
+            label = {"건강뉴스": "건강 기사", "연예뉴스": "연예 기사", "생활뉴스": "생활 기사"}.get(news_tag_val, "뉴스")
             st.success(f"📰 **{label}** 뉴스 컨텍스트가 아이디어 생성에 반영됩니다.")
+        else:
+            st.success("📰 **실시간 뉴스 트렌드**가 아이디어 생성에 자동 반영됩니다.")
 
     # ── 아이디어 생성 버튼 ──
-    if st.button("아이디어 생성 (10개)", type="primary", use_container_width=True):
+    if st.button("아이디어 생성", type="primary", use_container_width=True):
         cat_val = "" if selected_cat == "자동 선택" else selected_cat
         pat_val = "" if selected_pat == "자동 선택" else selected_pat
 
-        progress_bar = st.progress(0, text="에이전트 투입 중...")
-        status_area = st.empty()
+        progress_bar = st.progress(0, text="아이디어 생성 중...")
         agent_status = {}
 
         def on_progress(agent_name, status):
             agent_status[agent_name] = status
-            done = len(agent_status)
-            progress_bar.progress(done / len(AGENTS), text=f"{done}/{len(AGENTS)} 에이전트 완료")
+            progress_bar.progress(
+                min(len(agent_status) / 3, 0.9),
+                text=f"진행 중... ({status})",
+            )
 
-        with st.spinner("5개 에이전트가 동시에 아이디어를 생성하고 있습니다..."):
+        with st.spinner("아이디어를 생성하고 있습니다..."):
             ideas = generate_ideas(
                 topic_hint=topic_hint,
                 category=cat_val,
@@ -476,10 +487,12 @@ def render_cardnews_page():
         progress_bar.progress(1.0, text="아이디어 생성 완료!")
 
         if not ideas:
-            st.error("아이디어 생성에 실패했습니다. API 키를 확인해주세요.")
+            st.error("아이디어 생성 실패 — API rate limit 가능성이 높습니다.")
+            st.info("1~2분 후 다시 시도해주세요. (Groq 무료 플랜은 분당 호출 제한이 있습니다)")
         else:
             st.success(f"{len(ideas)}개 아이디어 생성 완료! 평가 중...")
-            with st.spinner("10개 아이디어 경쟁 평가 중..."):
+            time.sleep(3)  # eval 호출 전 rate limit 여유
+            with st.spinner("아이디어 경쟁 평가 중..."):
                 ideas = evaluate_ideas(ideas)
             st.session_state.cn_ideas = ideas
             st.session_state.cn_scripts = {}
@@ -531,11 +544,12 @@ def render_cardnews_page():
                 st.warning(f"중복 사유: {idea.get('dup_reason', '')}")
 
             st.markdown(f"**표지**: {idea.get('headline', '')}")
-            st.markdown(f"**내용1**: {idea.get('content1', '')}")
-            st.markdown(f"**내용2**: {idea.get('content2', '')}")
-            st.markdown(f"**내용3**: {idea.get('content3', '')}")
-            st.markdown(f"**내용4**: {idea.get('content4', '')}")
-            st.markdown(f"**내용5**: {idea.get('content5', '')}")
+            for ci in range(1, 20):
+                ck = f"content{ci}"
+                if idea.get(ck):
+                    st.markdown(f"**내용{ci}**: {idea.get(ck, '')}")
+                else:
+                    break
             st.markdown(f"**제품**: {idea.get('product', '')} | **패턴**: {idea.get('pattern', '')}")
             if idea.get("hashtags"):
                 st.caption(" ".join(idea["hashtags"]))
@@ -559,10 +573,25 @@ def render_cardnews_page():
         st.warning("중복이 아닌 아이디어가 없습니다. 다시 생성해주세요.")
         return
 
-    selected = st.multiselect(
-        "스크립트를 생성할 아이디어 선택",
-        select_options,
-        default=select_options[:min(2, len(select_options))],
+    sel_col, slide_col = st.columns([3, 1])
+    with sel_col:
+        selected = st.multiselect(
+            "스크립트를 생성할 아이디어 선택",
+            select_options,
+            default=select_options[:min(2, len(select_options))],
+        )
+    with slide_col:
+        num_content = st.slider(
+            "내용 카드 수", min_value=3, max_value=8, value=5,
+            help="표지 + 내용N장 + 클로징 = 총 장수",
+        )
+        st.caption(f"총 {num_content + 2}장 (표지+내용{num_content}+클로징)")
+
+    gen_mode = st.radio(
+        "생성 방식",
+        ["디스크립션 우선 (권장)", "기존 방식"],
+        horizontal=True,
+        help="디스크립션 우선: 인스타그램 캡션을 먼저 작성 → 카드뉴스로 분해. 맥락·가독성이 더 좋습니다.",
     )
 
     if st.button("선택 아이디어 스크립트 생성", type="primary"):
@@ -576,15 +605,30 @@ def render_cardnews_page():
             if not idea:
                 continue
 
-            with st.spinner(f"#{rank} '{idea.get('title', '')[:20]}...' 스크립트 생성 중..."):
-                script = generate_full_script(idea)
-                if script:
-                    st.session_state.cn_scripts[rank] = script
-                    desc = generate_description(script, idea)
-                    st.session_state.cn_descriptions[rank] = desc
-                    st.success(f"#{rank} 스크립트 + Description 생성 완료")
-                else:
-                    st.error(f"#{rank} 스크립트 생성 실패")
+            if gen_mode == "디스크립션 우선 (권장)":
+                with st.spinner(f"#{rank} 인스타그램 디스크립션 작성 → 카드뉴스 분해 중..."):
+                    script = generate_description_first(idea, num_content=num_content)
+                    if script:
+                        desc = script.pop("description", "")
+                        st.session_state.cn_scripts[rank] = script
+                        card_imgs = auto_search_card_images(script)
+                        st.session_state[f"cn_card_images_{rank}"] = card_imgs
+                        st.session_state.cn_descriptions[rank] = desc
+                        st.success(f"#{rank} 디스크립션 → 스크립트 → 이미지 완료")
+                    else:
+                        st.error(f"#{rank} 생성 실패")
+            else:
+                with st.spinner(f"#{rank} '{idea.get('title', '')[:20]}...' 스크립트 생성 중..."):
+                    script = generate_full_script(idea, num_content=num_content)
+                    if script:
+                        st.session_state.cn_scripts[rank] = script
+                        card_imgs = auto_search_card_images(script)
+                        st.session_state[f"cn_card_images_{rank}"] = card_imgs
+                        desc = generate_description(script, idea)
+                        st.session_state.cn_descriptions[rank] = desc
+                        st.success(f"#{rank} 스크립트 + 이미지 + Description 완료")
+                    else:
+                        st.error(f"#{rank} 스크립트 생성 실패")
         st.rerun()
 
     # ── 스크립트 결과 표시 ──
@@ -603,36 +647,87 @@ def render_cardnews_page():
 
                 st.markdown(f"**{idea.get('title', '')}** | {idea.get('agent_name', '')} | {idea.get('total_score', 0)}점")
 
-                # 7장 스크립트
-                st.markdown("**카드뉴스 스크립트 (7장)**")
-                card_data = [
-                    {"카드": "#1 표지", "스크립트": script.get("cover", "")},
-                    {"카드": "#2 내용1", "스크립트": script.get("content1", "")},
-                    {"카드": "#3 내용2", "스크립트": script.get("content2", "")},
-                    {"카드": "#4 내용3", "스크립트": script.get("content3", "")},
-                    {"카드": "#5 내용4", "스크립트": script.get("content4", "")},
-                    {"카드": "#6 내용5", "스크립트": script.get("content5", "")},
-                    {"카드": "#7 클로징", "스크립트": script.get("content6", "")},
-                ]
+                # 스크립트 테이블 (동적 장수)
+                content_keys = sorted(
+                    [k for k in script if k.startswith("content") and k[7:].isdigit()],
+                    key=lambda k: int(k[7:]),
+                )
+                total_slides = len(content_keys) + 1  # +1 for cover
+                st.markdown(f"**카드뉴스 스크립트 ({total_slides}장)**")
+                card_data = [{"카드": "#1 표지", "스크립트": script.get("cover", "")}]
+                for i, ck in enumerate(content_keys, 2):
+                    val = script.get(ck, "")
+                    if isinstance(val, dict):
+                        val = f"{val.get('heading', '')} | {val.get('body', '')}"
+                    card_data.append({"카드": f"#{i} 내용{ck[7:]}", "스크립트": val})
                 st.dataframe(card_data, use_container_width=True, hide_index=True)
 
-                # 이미지 프롬프트
-                img_prompts = script.get("image_prompts", {})
-                if img_prompts:
-                    with st.expander("이미지 프롬프트 (AI 이미지 생성용)"):
-                        prompt_labels = {
-                            "cover": "#1 표지",
-                            "content1": "#2 내용1",
-                            "content2": "#3 내용2",
-                            "content3": "#4 내용3",
-                            "content4": "#5 내용4",
-                            "content5": "#6 내용5",
-                        }
-                        for key, label in prompt_labels.items():
-                            p = img_prompts.get(key, "")
-                            if p:
-                                st.markdown(f"**{label}**")
-                                st.code(p, language=None)
+                # 카드뉴스 이미지 생성
+                card_images = st.session_state.get(f"cn_card_images_{rank}", {})
+                if card_images:
+                    with st.expander("카드뉴스 이미지", expanded=True):
+                        # 자동 검색된 배경 이미지 미리보기
+                        st.caption("Unsplash에서 자동 검색된 배경 이미지")
+                        _CLABELS = {f"content{i}": f"#{i+1} 내용{i}" for i in range(1, 20)}
+                        _CLABELS["cover"] = "#1 표지"
+                        preview_cols = st.columns(min(len(card_images), 6))
+                        for idx, (key, img_info) in enumerate(card_images.items()):
+                            with preview_cols[idx % len(preview_cols)]:
+                                st.image(img_info["thumb"], use_container_width=True)
+                                st.caption(f"{_CLABELS.get(key, key)}\nby {img_info['photographer']}")
+
+                        # 카드뉴스 이미지 생성 버튼
+                        gen_key = f"cn_generated_cards_{rank}"
+                        n_slides = total_slides + 1  # +1 for closing
+                        if st.button(f"카드뉴스 이미지 생성 ({n_slides}장)", key=f"gen_cards_{rank}", type="primary", use_container_width=True):
+                            gen_progress = st.progress(0, text="카드 이미지 생성 중...")
+                            gen_status = {}
+
+                            def _on_gen_progress(label, status):
+                                gen_status[label] = status
+                                gen_progress.progress(
+                                    min(len(gen_status) / n_slides, 0.99),
+                                    text=f"{label} {status}",
+                                )
+
+                            with st.spinner(f"카드뉴스 이미지 {n_slides}장을 생성하고 있습니다..."):
+                                generated = generate_all_card_images(script, card_images, _on_gen_progress)
+                            gen_progress.progress(1.0, text=f"{len(generated)}장 생성 완료!")
+                            st.session_state[gen_key] = generated
+                            st.rerun()
+
+                        # 생성된 카드 이미지 표시
+                        if gen_key in st.session_state and st.session_state[gen_key]:
+                            generated = st.session_state[gen_key]
+                            st.markdown(f"**생성된 카드뉴스 ({len(generated)}장)**")
+                            display_order = ["cover"] + [f"content{i}" for i in range(1, 20) if f"content{i}" in generated] + ["closing"]
+                            display_labels = {**_CLABELS, "closing": f"#{len(display_order)} 클로징"}
+
+                            # 3열 그리드
+                            for row_start in range(0, len(display_order), 3):
+                                row_keys = [k for k in display_order[row_start:row_start+3] if k in generated]
+                                if not row_keys:
+                                    continue
+                                g_cols = st.columns(len(row_keys))
+                                for col, key in zip(g_cols, row_keys):
+                                    with col:
+                                        st.image(generated[key], caption=display_labels.get(key, key), use_container_width=True)
+
+                            # ZIP 다운로드
+                            import zipfile
+                            from io import BytesIO
+                            zip_buf = BytesIO()
+                            with zipfile.ZipFile(zip_buf, "w") as zf:
+                                for key, img_bytes in generated.items():
+                                    label = display_labels.get(key, key).replace("#", "").replace(" ", "_")
+                                    zf.writestr(f"card_{label}.png", img_bytes)
+                            st.download_button(
+                                "전체 카드 이미지 다운로드 (ZIP)",
+                                data=zip_buf.getvalue(),
+                                file_name=f"cardnews_{rank}위_{idea.get('title', '')[:10]}.zip",
+                                mime="application/zip",
+                                use_container_width=True,
+                            )
 
                 # Description Mention
                 desc = descriptions.get(rank, "")

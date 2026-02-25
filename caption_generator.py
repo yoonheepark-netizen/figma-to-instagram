@@ -268,10 +268,65 @@ def _parse_ai_response(text):
     return {"hook": hook, "body": body}
 
 
+def _generate_with_gemini(image_texts, topics, tone="정보성"):
+    """Google Gemini API (1순위 — 무료 + 고품질)로 캡션을 생성합니다."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+
+    cache_key = _make_cache_key(image_texts, tone)
+    if cache_key in _caption_cache:
+        logger.info("캡션 캐시 히트 (Gemini)")
+        return _caption_cache[cache_key]
+
+    user_prompt = _build_user_prompt(image_texts, topics, tone)
+
+    try:
+        resp = _requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "systemInstruction": {
+                    "parts": [{"text": _AI_PROMPT}],
+                },
+                "contents": [
+                    {"role": "user", "parts": [{"text": user_prompt}]},
+                ],
+                "generationConfig": {
+                    "temperature": 0.5,
+                    "maxOutputTokens": 1000,
+                },
+            },
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            logger.warning("Gemini rate limit → Groq 전환")
+            return None
+        resp.raise_for_status()
+
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            logger.warning(f"Gemini 응답에 candidates 없음")
+            return None
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return None
+
+        text = parts[0].get("text", "")
+        result = _parse_ai_response(text)
+        if result:
+            _caption_cache[cache_key] = result
+            logger.info(f"Gemini 캡션 생성 성공: {result['hook'][:20]}...")
+        return result
+
+    except Exception as e:
+        logger.warning(f"Gemini API 호출 실패: {e}")
+        return None
+
+
 def _generate_with_groq(image_texts, topics, tone="정보성"):
-    """Groq API (무료, Llama 3.3 70B)로 캡션을 생성합니다.
-    추가 패키지 없이 requests만으로 호출합니다.
-    """
+    """Groq API (2순위, Llama 3.3 70B)로 캡션을 생성합니다."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return None
@@ -358,13 +413,18 @@ def _generate_with_claude(image_texts, topics, tone="정보성"):
 
 
 def _generate_with_ai(image_texts, topics, tone="정보성"):
-    """AI API로 캡션을 생성합니다. Groq(무료) → Claude 순서로 시도."""
-    # 1순위: Groq (무료, Llama 3.3 70B)
+    """AI API로 캡션을 생성합니다. Gemini → Groq → Claude 순서로 시도."""
+    # 1순위: Gemini (무료, 고품질)
+    result = _generate_with_gemini(image_texts, topics, tone)
+    if result:
+        return result
+
+    # 2순위: Groq (무료, Llama 3.3 70B)
     result = _generate_with_groq(image_texts, topics, tone)
     if result:
         return result
 
-    # 2순위: Claude
+    # 3순위: Claude
     result = _generate_with_claude(image_texts, topics, tone)
     if result:
         return result

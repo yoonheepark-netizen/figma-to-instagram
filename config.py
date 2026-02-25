@@ -37,6 +37,10 @@ class Config:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+    # 이미지 소싱
+    UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
     # API versions
     GRAPH_API_VERSION = "v21.0"
     GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"

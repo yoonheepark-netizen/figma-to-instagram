@@ -215,6 +215,16 @@ PRODUCT_IMAGES = {
         "products/gdrive_chongmyeong_2.jpg",
         "products/gdrive_chongmyeong_3.jpg",
     ],
+    "콜드퀵": [
+        "products/gdrive_coldquick_1.jpg",
+        "products/gdrive_coldquick_2.jpg",
+        "products/gdrive_coldquick_3.jpg",
+    ],
+    "까스퀵": [
+        "products/gdrive_gasquick_1.jpg",
+        "products/gdrive_gasquick_2.jpg",
+        "products/gdrive_gasquick_3.jpg",
+    ],
 }
 
 

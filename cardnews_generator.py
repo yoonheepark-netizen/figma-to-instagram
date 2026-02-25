@@ -2386,7 +2386,7 @@ def generate_all_card_images(
                 heading, body = _split_heading_body(text)
                 # 제품 키워드 감지 시 Unsplash 대신 제품 이미지 사용
                 content_text = str(text) if isinstance(text, str) else f"{text.get('heading', '')} {text.get('body', '')}"
-                _PRODUCT_KW = ("경옥고", "공진단", "총명공진단", "우황청심원", "녹용한약", "녹용")
+                _PRODUCT_KW = ("경옥고", "공진단", "총명공진단", "우황청심원", "녹용한약", "녹용", "콜드퀵", "까스퀵")
                 use_product_bg = any(kw in content_text for kw in _PRODUCT_KW)
                 image_bytes = renderer.render_content(
                     heading=heading, body=body,

@@ -425,7 +425,9 @@ def render_cardnews_page():
                         src_emoji = {"monthly": "📅", "solar": "🗓️", "season": "🌿",
                                      "trend": "🔥", "news": "📰",
                                      "google_trend": "🔍", "google_trend_general": "🔍",
-                                     "x_trend": "𝕏"}.get(src, "📌")
+                                     "x_trend": "𝕏",
+                                     "naver_trend": "🅽", "naver_trend_general": "🅽",
+                                     }.get(src, "📌")
                         tag_short = sug["tag"][:8]
                         st.markdown(
                             f"<div style='display:flex;justify-content:space-between;align-items:center'>"

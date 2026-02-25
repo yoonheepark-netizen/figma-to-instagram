@@ -41,6 +41,10 @@ class Config:
     UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+    # GIF / 영상 소싱
+    GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
+    PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+
     # API versions
     GRAPH_API_VERSION = "v21.0"
     GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"

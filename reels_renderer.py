@@ -1,7 +1,7 @@
 """릴스 프레임 이미지 렌더러 — 1분건강톡 브랜딩.
 
 1080×1920 (9:16 세로) 프레임을 PIL로 렌더링.
-card_news.py의 폰트·유틸리티 재사용.
+투명 텍스트 오버레이 모드 지원 (GIF/영상 배경용).
 """
 from __future__ import annotations
 
@@ -18,16 +18,16 @@ BRAND = {
     "blue": (43, 91, 224),        # #2B5BE0
     "red": (255, 71, 87),         # #FF4757
     "white": (255, 255, 255),
-    "dark": (20, 20, 30),         # 텍스트 그림자용
+    "dark": (20, 20, 30),
+    "yellow": (255, 214, 0),      # 강조 하이라이트
 }
 
 W, H = 1080, 1920  # 9:16
 
 # ── 에셋 경로 ────────────────────────────────────────────
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "1min_health")
-_COMMON_ASSETS = os.path.join(os.path.dirname(__file__), "assets")
 
-# ── 폰트 (card_news.py와 동일 구조) ─────────────────────
+# ── 폰트 ─────────────────────────────────────────────────
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 _FONT_PATHS = {
     "bold": [
@@ -75,7 +75,6 @@ def _load_font(role: str, size: int) -> ImageFont.FreeTypeFont:
 # ── 유틸리티 ─────────────────────────────────────────────
 
 def _fit_cover(photo: Image.Image, w: int, h: int) -> Image.Image:
-    """이미지를 w×h에 맞게 중앙 크롭+리사이즈."""
     pw, ph = photo.size
     target_ratio = w / h
     photo_ratio = pw / ph
@@ -120,7 +119,6 @@ def _load_asset(name: str) -> Image.Image | None:
 
 def _draw_gradient(draw: ImageDraw.ImageDraw, y_start: int, y_end: int,
                    color_top: tuple, color_bot: tuple, alpha_top: int = 0, alpha_bot: int = 220):
-    """세로 그라디언트를 그린다."""
     h = y_end - y_start
     for i in range(h):
         ratio = i / max(h - 1, 1)
@@ -132,7 +130,6 @@ def _draw_gradient(draw: ImageDraw.ImageDraw, y_start: int, y_end: int,
 
 
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
-    """텍스트를 max_width에 맞게 줄바꿈."""
     lines = []
     for raw_line in text.split("\n"):
         if not raw_line.strip():
@@ -153,6 +150,12 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[
     return lines
 
 
+def _draw_rounded_rect(draw: ImageDraw.ImageDraw, xy: tuple, radius: int, fill: tuple):
+    """둥근 모서리 사각형."""
+    x0, y0, x1, y1 = xy
+    draw.rounded_rectangle(xy, radius=radius, fill=fill)
+
+
 # ═════════════════════════════════════════════════════════
 # ReelsRenderer
 # ═════════════════════════════════════════════════════════
@@ -164,28 +167,115 @@ class ReelsRenderer:
         self.logo_badge = _load_asset("logo_2.png")
         self.logo_full = _load_asset("logo_1.png")
 
-    # ── Hook 슬라이드 ────────────────────────────────────
-    def render_hook(self, display_text: str, bg_image=None) -> bytes:
-        """후킹 슬라이드: 큰 텍스트 + 배경."""
-        canvas = Image.new("RGBA", (W, H), BRAND["blue"])
+    # ── 투명 텍스트 오버레이 (GIF/영상 배경용) ────────────
 
-        # 배경 이미지
+    def render_text_overlay(self, display_text: str, slide_type: str = "content",
+                            slide_num: int | None = None, total: int | None = None) -> bytes:
+        """GIF/영상 위에 합성할 투명 배경 텍스트 오버레이 PNG.
+
+        하단에 반투명 브랜드 블루 박스 + 큰 흰색 텍스트.
+        상단에 로고 배지 + 슬라이드 번호.
+        """
+        canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+
+        if slide_type == "hook":
+            # Hook: 전체 어두운 오버레이 + 중앙 큰 텍스트
+            dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 100))
+            canvas = Image.alpha_composite(canvas, dark_overlay)
+            draw = ImageDraw.Draw(canvas)
+
+            # 중앙 텍스트 박스
+            font = _load_font("bold", 78)
+            lines = _wrap_text(display_text, font, W - 140)
+            line_h = 100
+            total_h = len(lines) * line_h + 60  # 패딩 포함
+            box_y = (H - total_h) // 2 - 30
+            # 반투명 블루 박스
+            box = Image.new("RGBA", (W - 60, total_h), (*BRAND["blue"], 200))
+            canvas.paste(box, (30, box_y), box)
+            draw = ImageDraw.Draw(canvas)
+
+            y = box_y + 30
+            for line in lines:
+                bbox = font.getbbox(line)
+                tw = bbox[2] - bbox[0]
+                x = (W - tw) // 2
+                # 그림자
+                draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 180))
+                draw.text((x, y), line, font=font, fill=BRAND["white"])
+                y += line_h
+
+        else:
+            # Content: 하단 35% 반투명 블루 박스
+            box_h = int(H * 0.35)
+            box_y = H - box_h
+
+            # 그라데이션 오버레이 (블루 → 투명)
+            grad_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            _draw_gradient(ImageDraw.Draw(grad_overlay),
+                           box_y - 120, box_y,
+                           BRAND["blue"], BRAND["blue"],
+                           alpha_top=0, alpha_bot=210)
+            canvas = Image.alpha_composite(canvas, grad_overlay)
+
+            # 블루 박스
+            blue_box = Image.new("RGBA", (W, box_h), (*BRAND["blue"], 210))
+            canvas.paste(blue_box, (0, box_y), blue_box)
+            draw = ImageDraw.Draw(canvas)
+
+            # 텍스트
+            font = _load_font("bold", 62)
+            lines = _wrap_text(display_text, font, W - 120)
+            line_h = 82
+            text_total = len(lines) * line_h
+            y = box_y + (box_h - text_total) // 2 - 20
+            for line in lines:
+                bbox = font.getbbox(line)
+                tw = bbox[2] - bbox[0]
+                x = (W - tw) // 2
+                draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 120))
+                draw.text((x, y), line, font=font, fill=BRAND["white"])
+                y += line_h
+
+        # 로고 배지
+        self._draw_badge(canvas, draw)
+
+        # 슬라이드 번호
+        if slide_num and total:
+            num_font = _load_font("bold", 38)
+            num_text = f"{slide_num}/{total}"
+            # 반투명 배경 원
+            pill_w = 90
+            pill_h = 48
+            pill_x = W - pill_w - 30
+            pill_y = 38
+            pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 140))
+            canvas.paste(pill, (pill_x, pill_y), pill)
+            draw = ImageDraw.Draw(canvas)
+            bbox = num_font.getbbox(num_text)
+            tw = bbox[2] - bbox[0]
+            draw.text((pill_x + (pill_w - tw) // 2, pill_y + 4),
+                       num_text, font=num_font, fill=BRAND["white"])
+
+        # 하단 계정명
+        self._draw_account(draw)
+
+        return self._export_rgba(canvas)
+
+    # ── Hook 슬라이드 (정적 배경용) ───────────────────────
+    def render_hook(self, display_text: str, bg_image=None) -> bytes:
+        canvas = Image.new("RGBA", (W, H), BRAND["blue"])
         bg = _open_image(bg_image)
         if bg:
             fitted = _fit_cover(bg, W, H)
             canvas.paste(fitted, (0, 0))
-            # 어두운 오버레이
             overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             _draw_gradient(ImageDraw.Draw(overlay), 0, H,
                            (0, 0, 0), (0, 0, 0), alpha_top=80, alpha_bot=200)
             canvas = Image.alpha_composite(canvas, overlay)
-
         draw = ImageDraw.Draw(canvas)
-
-        # 로고 배지 (좌상단)
         self._draw_badge(canvas, draw)
-
-        # 중앙 큰 텍스트
         font = _load_font("bold", 72)
         lines = _wrap_text(display_text, font, W - 120)
         line_h = 90
@@ -195,54 +285,39 @@ class ReelsRenderer:
             bbox = font.getbbox(line)
             tw = bbox[2] - bbox[0]
             x = (W - tw) // 2
-            # 그림자
             draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 150))
             draw.text((x, y), line, font=font, fill=BRAND["white"])
             y += line_h
-
-        # 하단 계정명
         self._draw_account(draw)
-
         return self._export(canvas)
 
-    # ── Content 슬라이드 ─────────────────────────────────
+    # ── Content 슬라이드 (정적 배경용) ────────────────────
     def render_content(self, display_text: str, bg_image=None,
                        slide_num: int | None = None, total: int | None = None) -> bytes:
-        """콘텐츠 슬라이드: 상단 이미지 + 하단 블루 텍스트."""
         canvas = Image.new("RGBA", (W, H), BRAND["blue"])
-
-        # 상단 60%: 배경 이미지 영역
         img_h = int(H * 0.58)
         bg = _open_image(bg_image)
         if bg:
             fitted = _fit_cover(bg, W, img_h)
             canvas.paste(fitted, (0, 0))
         else:
-            # 이미지 없으면 밝은 블루 그라데이션
             overlay = Image.new("RGBA", (W, img_h), (0, 0, 0, 0))
             _draw_gradient(ImageDraw.Draw(overlay), 0, img_h,
                            (60, 120, 240), BRAND["blue"],
                            alpha_top=255, alpha_bot=255)
             canvas.paste(overlay, (0, 0))
-
-        # 이미지↔블루 경계 그라데이션
         blend_h = 120
         blend_overlay = Image.new("RGBA", (W, blend_h), (0, 0, 0, 0))
         _draw_gradient(ImageDraw.Draw(blend_overlay), 0, blend_h,
                        BRAND["blue"], BRAND["blue"],
                        alpha_top=0, alpha_bot=255)
         canvas.alpha_composite(blend_overlay, (0, img_h - blend_h))
-
         draw = ImageDraw.Draw(canvas)
-
-        # 로고 배지 + 슬라이드 번호
         self._draw_badge(canvas, draw)
         if slide_num and total:
             num_font = _load_font("bold", 36)
             num_text = f"{slide_num}/{total}"
             draw.text((W - 100, 40), num_text, font=num_font, fill=BRAND["white"])
-
-        # 하단 텍스트 영역
         text_y_start = img_h + 40
         font = _load_font("bold", 58)
         lines = _wrap_text(display_text, font, W - 120)
@@ -254,19 +329,13 @@ class ReelsRenderer:
             x = (W - tw) // 2
             draw.text((x, y), line, font=font, fill=BRAND["white"])
             y += line_h
-
-        # 하단 계정명
         self._draw_account(draw)
-
         return self._export(canvas)
 
     # ── Closing 슬라이드 ─────────────────────────────────
     def render_closing(self, display_text: str = "팔로우하고\n건강 팁 받기!") -> bytes:
-        """클로징 슬라이드: 로고 + CTA."""
         canvas = Image.new("RGBA", (W, H), BRAND["blue"])
         draw = ImageDraw.Draw(canvas)
-
-        # 중앙 풀 로고
         logo = self.logo_full
         if logo:
             logo_size = 400
@@ -274,8 +343,6 @@ class ReelsRenderer:
             x = (W - logo_size) // 2
             y = (H - logo_size) // 2 - 150
             canvas.paste(resized, (x, y), resized if resized.mode == "RGBA" else None)
-
-        # CTA 텍스트
         font = _load_font("bold", 52)
         lines = display_text.split("\n")
         line_h = 70
@@ -286,16 +353,12 @@ class ReelsRenderer:
             x = (W - tw) // 2
             draw.text((x, y), line, font=font, fill=BRAND["white"])
             y += line_h
-
-        # 하단 계정명
         self._draw_account(draw)
-
         return self._export(canvas)
 
     # ── 공통 헬퍼 ────────────────────────────────────────
 
     def _draw_badge(self, canvas: Image.Image, draw: ImageDraw.ImageDraw):
-        """좌상단에 로고 배지."""
         badge = self.logo_badge
         if badge:
             badge_size = 72
@@ -303,7 +366,6 @@ class ReelsRenderer:
             canvas.paste(resized, (30, 40), resized if resized.mode == "RGBA" else None)
 
     def _draw_account(self, draw: ImageDraw.ImageDraw):
-        """하단 중앙에 계정명."""
         font = _load_font("semibold", 30)
         text = "@1분건강톡"
         bbox = font.getbbox(text)
@@ -311,36 +373,32 @@ class ReelsRenderer:
         draw.text(((W - tw) // 2, H - 80), text, font=font, fill=(255, 255, 255, 180))
 
     def _export(self, canvas: Image.Image) -> bytes:
-        """RGBA → RGB 변환 후 PNG bytes 반환."""
+        """RGBA → RGB 변환 후 PNG bytes."""
         rgb = Image.new("RGB", canvas.size, BRAND["blue"])
         rgb.paste(canvas, mask=canvas.split()[3] if canvas.mode == "RGBA" else None)
         buf = io.BytesIO()
         rgb.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
 
+    def _export_rgba(self, canvas: Image.Image) -> bytes:
+        """RGBA 그대로 PNG bytes (투명 배경 유지)."""
+        buf = io.BytesIO()
+        canvas.save(buf, format="PNG")
+        return buf.getvalue()
+
     # ── 배치 렌더링 ──────────────────────────────────────
 
     def render_all(self, slides: list[dict], bg_images: dict[str, bytes | None] = None) -> list[bytes]:
-        """전체 슬라이드 렌더링.
-
-        Args:
-            slides: [{"type": "hook"|"content"|"closing", "display_text": "...", ...}, ...]
-            bg_images: {"slide_0": bytes, "slide_1": bytes, ...} or None
-
-        Returns: 슬라이드 이미지 bytes 리스트
-        """
+        """전체 슬라이드 렌더링 (정적 배경 모드)."""
         if bg_images is None:
             bg_images = {}
-
         results = []
         content_idx = 0
         total_content = sum(1 for s in slides if s["type"] == "content")
-
         for i, slide in enumerate(slides):
             bg = bg_images.get(f"slide_{i}")
             stype = slide["type"]
             text = slide.get("display_text", "")
-
             if stype == "hook":
                 results.append(self.render_hook(text, bg_image=bg))
             elif stype == "content":
@@ -353,5 +411,25 @@ class ReelsRenderer:
                 results.append(self.render_closing(text))
             else:
                 results.append(self.render_content(text, bg_image=bg))
+        return results
 
+    def render_overlays(self, slides: list[dict]) -> list[bytes]:
+        """전체 슬라이드의 투명 텍스트 오버레이 PNG 생성 (GIF/영상 배경용)."""
+        results = []
+        content_idx = 0
+        total_content = sum(1 for s in slides if s["type"] == "content")
+        for slide in slides:
+            stype = slide["type"]
+            text = slide.get("display_text", "")
+            if stype == "closing":
+                # closing은 정적 렌더링 (로고 포함)
+                results.append(self.render_closing(text))
+            else:
+                if stype == "content":
+                    content_idx += 1
+                results.append(self.render_text_overlay(
+                    text, slide_type=stype,
+                    slide_num=content_idx if stype == "content" else None,
+                    total=total_content if stype == "content" else None,
+                ))
         return results

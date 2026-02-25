@@ -39,6 +39,7 @@ from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
 from pencil_client import PencilClient
+from media_source import search_and_download, search_media, download_media, get_available_sources, check_api_status
 from reels_renderer import ReelsRenderer
 from reels_script_generator import generate_reels_script
 from reels_video import create_reel, VOICES, DEFAULT_VOICE
@@ -802,46 +803,33 @@ def render_cardnews_page():
 
 
 def render_reels_page():
-    """🎬 릴스 생성 페이지를 렌더링합니다."""
+    """🎬 릴스 생성 페이지 — GIF/영상 배경 + 유머 스크립트."""
     st.markdown("##### 🎬 릴스 생성 — 1분건강톡")
-    st.caption("주제 입력 → AI 스크립트 → 나레이션(TTS) → 영상 합성까지 한 번에")
+    st.caption("주제 → AI 스크립트(유머+밈) → GIF/영상 배경 → 나레이션 → 영상 합성")
 
-    # ── 채널 인사이트 (실제 데이터 기반) ──
+    # ── 미디어 소스 상태 ──
+    sources = get_available_sources()
+    active_sources = [k for k, v in sources.items() if v]
+    source_labels = {"giphy": "🎭 GIPHY GIF", "tenor": "🎵 Tenor GIF", "pexels": "🎬 Pexels Video", "unsplash": "📷 Unsplash"}
+    st.caption(f"미디어 소스: {' · '.join(source_labels.get(s, s) for s in active_sources)}")
+
+    # ── 채널 인사이트 ──
     _insights_path = os.path.join(os.path.dirname(__file__), "assets", "1min_health", "insights_summary.json")
     if os.path.exists(_insights_path):
         with open(_insights_path) as _f:
             _insights = json.load(_f)
-        with st.expander("📊 채널 인사이트 — 바이럴 성공 공식 (66개 릴스 분석)", expanded=False):
+        with st.expander("📊 바이럴 성공 공식 (66개 릴스 분석)", expanded=False):
             _acct = _insights.get("account", {})
             ic1, ic2, ic3, ic4 = st.columns(4)
             ic1.metric("팔로워", f'{_acct.get("followers", 0):,}')
             ic2.metric("총 릴스", f'{_acct.get("total_reels", 0)}개')
             ic3.metric("총 조회수", f'{_acct.get("total_views", 0):,}')
             ic4.metric("평균 조회수", f'{_acct.get("avg_views", 0):,}')
-
-            st.markdown("**Hook 기법 (데이터 기반)**")
-            for tech, desc in _insights.get("viral_patterns", {}).get("hook_techniques", {}).items():
-                st.caption(f"  {tech}: {desc}")
-
-            st.markdown("**Top 5 바이럴 릴스**")
-            _top_data = []
-            for tp in _insights.get("top_10_posts", [])[:5]:
-                _top_data.append({
-                    "날짜": tp["date"],
-                    "Hook": tp["caption_first_line"][:40],
-                    "조회수": f'{tp["views"]:,}',
-                    "공유": f'{tp["shares"]:,}',
-                    "저장": f'{tp["saved"]:,}',
-                })
-            st.dataframe(_top_data, use_container_width=True, hide_index=True)
-            st.caption("스크립트 생성 시 이 패턴들이 자동으로 반영됩니다.")
+            st.markdown("**Hook 기법**: 숫자(33%) · 질문(29%) · 충격(18%) · 공감 저격(11%)")
+            st.caption("스크립트 생성 시 이 패턴들이 자동 반영됩니다.")
 
     # ── 세션 초기화 ──
-    for key, default in [
-        ("rl_script", None),
-        ("rl_frames", None),
-        ("rl_result", None),
-    ]:
+    for key, default in [("rl_script", None), ("rl_frames", None), ("rl_result", None), ("rl_media", None)]:
         if key not in st.session_state:
             st.session_state[key] = default
 
@@ -849,127 +837,108 @@ def render_reels_page():
     st.markdown("---")
     st.markdown("###### Step 1. 주제 설정")
 
-    # 추천 주제 재활용
     def _set_reels_topic(topic: str):
         st.session_state["rl_topic_input"] = topic
 
     col_topic, col_slides = st.columns([4, 1])
     with col_topic:
-        topic = st.text_input(
-            "릴스 주제",
-            key="rl_topic_input",
-            placeholder="예: 겨울철 일교차 건강관리, 수면 부족 해결법...",
-        )
+        topic = st.text_input("릴스 주제", key="rl_topic_input",
+                              placeholder="예: 겨울철 일교차 건강관리, 수면 부족 해결법...")
     with col_slides:
-        num_slides = st.slider("슬라이드 수", min_value=5, max_value=8, value=6,
-                               help="hook 1장 + content N장 + closing 1장")
+        num_slides = st.slider("슬라이드 수", 5, 8, 6, help="hook 1 + content N + closing 1")
         st.caption(f"hook 1 + content {num_slides - 2} + closing 1")
 
-    # 추천 주제 (카드뉴스와 동일한 소스)
     with st.expander("📌 추천 주제 (클릭하면 자동 입력)", expanded=False):
         suggestions = suggest_topics(include_news=True)
         if suggestions:
             display = suggestions[:15]
-            _src_emoji = {
-                "monthly": "📅", "solar": "🗓️", "season": "🌿",
-                "trend": "🔥", "news": "📰",
-                "google_trend": "🔍", "google_trend_general": "🔍",
-                "x_trend": "𝕏",
-                "naver_trend": "🅽", "naver_trend_general": "🅽",
-            }
-            num_cols = 5
-            for row_start in range(0, len(display), num_cols):
-                row_items = display[row_start:row_start + num_cols]
-                cols = st.columns(num_cols)
+            _src_emoji = {"monthly": "📅", "solar": "🗓️", "season": "🌿", "trend": "🔥", "news": "📰",
+                          "google_trend": "🔍", "google_trend_general": "🔍", "x_trend": "𝕏",
+                          "naver_trend": "🅽", "naver_trend_general": "🅽"}
+            for row_start in range(0, len(display), 5):
+                row_items = display[row_start:row_start + 5]
+                cols = st.columns(5)
                 for idx_in_row, sug in enumerate(row_items):
                     global_idx = row_start + idx_in_row
                     with cols[idx_in_row]:
                         emoji = _src_emoji.get(sug.get("source_type", ""), "📌")
-                        score = sug.get("score", 0)
                         clean = sug["topic"].replace("**", "").replace("*", "")
                         short = clean[:18] + ("…" if len(clean) > 18 else "")
                         st.markdown(
-                            f"<div style='border:1px solid #e0e0e0;border-radius:6px;"
-                            f"padding:6px 8px;margin-bottom:2px'>"
+                            f"<div style='border:1px solid #e0e0e0;border-radius:6px;padding:6px 8px;margin-bottom:2px'>"
                             f"<span style='font-size:11px;color:#999'>{emoji}</span> "
-                            f"<span style='font-size:12px;font-weight:600'>{short}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.button("선택", key=f"rl_sug_{global_idx}",
-                                  use_container_width=True,
+                            f"<span style='font-size:12px;font-weight:600'>{short}</span></div>",
+                            unsafe_allow_html=True)
+                        st.button("선택", key=f"rl_sug_{global_idx}", use_container_width=True,
                                   on_click=_set_reels_topic, args=(sug["topic"],))
 
     # ── Step 2: 스크립트 생성 ──
     st.markdown("---")
-    st.markdown("###### Step 2. 릴스 스크립트 생성")
+    st.markdown("###### Step 2. 릴스 스크립트 (유머 + GIF 매칭)")
 
     if st.button("🎬 스크립트 생성", type="primary", use_container_width=True, disabled=not topic):
-        with st.spinner("릴스 스크립트를 생성하고 있습니다..."):
+        with st.spinner("밈+유머 스크립트 생성 중..."):
             script = generate_reels_script(topic, num_slides=num_slides)
         if script:
             st.session_state.rl_script = script
             st.session_state.rl_frames = None
             st.session_state.rl_result = None
+            st.session_state.rl_media = None
             st.success(f"스크립트 생성 완료! ({len(script.get('slides', []))}장)")
             st.rerun()
         else:
-            st.error("스크립트 생성 실패 — API 제한일 수 있습니다. 잠시 후 다시 시도해주세요.")
+            st.error("스크립트 생성 실패 — 잠시 후 다시 시도해주세요.")
 
     script = st.session_state.rl_script
     if not script:
         st.caption("주제를 입력하고 스크립트를 생성하면 여기에 결과가 표시됩니다.")
         return
 
-    # 스크립트 미리보기
     st.markdown(f"**{script.get('title', '')}**")
     slides = script.get("slides", [])
 
+    # 스크립트 미리보기 (media_query 포함)
     slide_data = []
     for i, s in enumerate(slides):
         slide_data.append({
             "#": i + 1,
-            "타입": {"hook": "🎣 Hook", "content": "📄 Content", "closing": "👋 Closing"}.get(s["type"], s["type"]),
-            "나레이션 (TTS)": s.get("narration", "")[:60],
-            "화면 텍스트": s.get("display_text", "").replace("\n", " | "),
+            "타입": {"hook": "🎣 Hook", "content": "📄", "closing": "👋"}.get(s["type"], s["type"]),
+            "나레이션": s.get("narration", "")[:50],
+            "화면": s.get("display_text", "").replace("\n", " | ")[:30],
+            "미디어": f'{s.get("media_type", "gif")} | {s.get("media_query", "")[:25]}',
         })
     st.dataframe(slide_data, use_container_width=True, hide_index=True)
 
-    # 해시태그
     if script.get("hashtags"):
         st.caption(" ".join(script["hashtags"][:10]))
 
-    # 스크립트 JSON 편집
     with st.expander("스크립트 JSON 편집"):
-        edited_json = st.text_area(
-            "JSON",
-            value=json.dumps(script, ensure_ascii=False, indent=2),
-            height=300,
-            key="rl_script_editor",
-        )
+        edited_json = st.text_area("JSON", value=json.dumps(script, ensure_ascii=False, indent=2),
+                                   height=300, key="rl_script_editor")
         if st.button("스크립트 업데이트", key="rl_script_update"):
             try:
                 updated = json.loads(edited_json)
                 st.session_state.rl_script = updated
                 st.session_state.rl_frames = None
                 st.session_state.rl_result = None
-                st.success("스크립트가 업데이트되었습니다.")
+                st.session_state.rl_media = None
+                st.success("스크립트 업데이트 완료")
                 st.rerun()
             except json.JSONDecodeError as e:
                 st.error(f"JSON 파싱 오류: {e}")
 
     # ── Step 3: 나레이션 & 영상 생성 ──
     st.markdown("---")
-    st.markdown("###### Step 3. 나레이션 & 영상 생성")
+    st.markdown("###### Step 3. GIF/영상 배경 + 나레이션 + 영상 합성")
 
     col_voice, col_intro, col_bumper = st.columns(3)
     with col_voice:
         voice_name = st.selectbox("TTS 음성", list(VOICES.keys()), index=0)
         voice_id = VOICES[voice_name]
     with col_intro:
-        inc_intro = st.checkbox("인트로 포함", value=True, help="INTRO.mp4 (6.7초)")
+        inc_intro = st.checkbox("인트로 포함", value=True, help="INTRO.mp4")
     with col_bumper:
-        inc_bumper = st.checkbox("범퍼 포함", value=True, help="BUMPER.mov (2.6초)")
+        inc_bumper = st.checkbox("범퍼 포함", value=True, help="BUMPER.mov")
 
     if st.button("🎬 릴스 영상 생성", type="primary", use_container_width=True):
         script = st.session_state.rl_script
@@ -982,48 +951,48 @@ def render_reels_page():
             progress_bar.progress(min(pct, 0.99), text=msg)
             status_text.caption(msg)
 
-        # Phase 1: 배경 이미지 검색
-        _progress(0.0, "배경 이미지 검색 중...")
-        bg_images = {}
+        # Phase 1: GIF/영상 미디어 검색 + 다운로드
+        _progress(0.0, "GIF/영상 미디어 검색 중...")
+        media_data = []  # [(bytes, metadata), ...]
         for i, slide in enumerate(slides):
-            prompt = slide.get("image_prompt", "")
-            if prompt:
-                try:
-                    result = search_unsplash(prompt, per_page=1)
-                    if result:
-                        img_url = result[0].get("urls", {}).get("regular", "")
-                        if img_url:
-                            resp = req.get(img_url, timeout=15)
-                            if resp.status_code == 200:
-                                bg_images[f"slide_{i}"] = resp.content
-                except Exception as e:
-                    pass  # 이미지 없으면 기본 블루 배경 사용
-            _progress(0.05 + (i / len(slides)) * 0.1, f"이미지 검색 중... ({i + 1}/{len(slides)})")
+            query = slide.get("media_query", "") or slide.get("image_prompt", "")
+            media_type = slide.get("media_type", "gif")
 
-        # Phase 2: 프레임 렌더링
-        _progress(0.15, "프레임 이미지 렌더링 중...")
+            if not query or slide.get("type") == "closing":
+                media_data.append((None, None))
+            else:
+                m_bytes, m_info = search_and_download(query, preferred_type=media_type)
+                if m_bytes and m_info:
+                    media_data.append((m_bytes, m_info))
+                    _progress(0.02 + (i / len(slides)) * 0.13,
+                              f"미디어 {i + 1}/{len(slides)}: {m_info['type']}/{m_info.get('source', '?')}")
+                else:
+                    media_data.append((None, None))
+                    _progress(0.02 + (i / len(slides)) * 0.13,
+                              f"미디어 {i + 1}/{len(slides)}: 폴백 (단색 배경)")
+
+        st.session_state.rl_media = media_data
+
+        # Phase 2: 텍스트 오버레이 렌더링
+        _progress(0.15, "텍스트 오버레이 렌더링 중...")
         renderer = ReelsRenderer()
-        frame_images = renderer.render_all(slides, bg_images)
-        st.session_state.rl_frames = frame_images
-        _progress(0.25, f"프레임 {len(frame_images)}장 렌더링 완료")
+        overlay_images = renderer.render_overlays(slides)
+        st.session_state.rl_frames = overlay_images
+        _progress(0.20, f"오버레이 {len(overlay_images)}장 렌더링 완료")
 
         # Phase 3: 나레이션 + 영상 합성
         import tempfile
         output_dir = tempfile.mkdtemp(prefix="reel_")
 
-        def _video_progress(pct, msg):
-            # Phase 3은 전체의 25%~95% 구간
-            overall = 0.25 + pct * 0.7
-            _progress(overall, msg)
-
         result = create_reel(
             slides=slides,
-            frame_images=frame_images,
+            media_data=media_data,
+            overlay_images=overlay_images,
             output_dir=output_dir,
             voice=voice_id,
             include_intro=inc_intro,
             include_bumper=inc_bumper,
-            progress_callback=_video_progress,
+            progress_callback=lambda pct, msg: _progress(0.20 + pct * 0.75, msg),
         )
         st.session_state.rl_result = result
 
@@ -1031,7 +1000,7 @@ def render_reels_page():
         status_text.empty()
         st.rerun()
 
-    # ── Step 4: 결과 표시 ──
+    # ── Step 4: 결과 ──
     result = st.session_state.rl_result
     if not result:
         return
@@ -1039,52 +1008,47 @@ def render_reels_page():
     st.markdown("---")
     st.markdown("###### Step 4. 결과")
 
-    # 영상 미리보기
     st.video(result["video_bytes"])
     dur = result.get("duration", 0)
     size_mb = len(result["video_bytes"]) / 1024 / 1024
     st.caption(f"길이: {dur:.1f}초 | 크기: {size_mb:.1f} MB | 1080×1920 (9:16)")
 
-    # 다운로드 버튼
+    # 미디어 소스 요약
+    media_data = st.session_state.get("rl_media", [])
+    if media_data:
+        source_summary = []
+        for i, (_, m_info) in enumerate(media_data):
+            if m_info:
+                source_summary.append(f"#{i+1}: {m_info['type']}/{m_info.get('source', '?')}")
+            else:
+                source_summary.append(f"#{i+1}: 브랜드 배경")
+        st.caption("배경: " + " · ".join(source_summary))
+
     title_slug = (script.get("title", "reel") or "reel")[:15].replace(" ", "_")
     col_dl_video, col_dl_json = st.columns(2)
     with col_dl_video:
-        st.download_button(
-            "🎬 MP4 다운로드",
-            data=result["video_bytes"],
-            file_name=f"reel_{title_slug}_{datetime.now().strftime('%y%m%d_%H%M')}.mp4",
-            mime="video/mp4",
-            use_container_width=True,
-        )
+        st.download_button("🎬 MP4 다운로드", data=result["video_bytes"],
+                           file_name=f"reel_{title_slug}_{datetime.now().strftime('%y%m%d_%H%M')}.mp4",
+                           mime="video/mp4", use_container_width=True)
     with col_dl_json:
-        export = {
-            "script": script,
-            "duration": dur,
-            "created_at": datetime.now().isoformat(),
-        }
-        st.download_button(
-            "📄 스크립트 JSON",
-            data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name=f"reel_script_{title_slug}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+        export = {"script": script, "duration": dur, "created_at": datetime.now().isoformat()}
+        st.download_button("📄 스크립트 JSON",
+                           data=json.dumps(export, ensure_ascii=False, indent=2),
+                           file_name=f"reel_script_{title_slug}.json",
+                           mime="application/json", use_container_width=True)
 
-    # 프레임 이미지 미리보기
     frames = st.session_state.rl_frames
     if frames:
         with st.expander("슬라이드 프레임 이미지", expanded=False):
             for row_start in range(0, len(frames), 4):
                 row = frames[row_start:row_start + 4]
                 cols = st.columns(len(row))
-                for col, img_bytes in zip(cols, row):
-                    with col:
-                        slide_idx = row_start + row.index(img_bytes)
+                for col_idx, img_bytes in enumerate(row):
+                    with cols[col_idx]:
+                        slide_idx = row_start + col_idx
                         stype = slides[slide_idx]["type"] if slide_idx < len(slides) else "?"
-                        st.image(img_bytes, caption=f"#{slide_idx + 1} {stype}",
-                                 use_container_width=True)
+                        st.image(img_bytes, caption=f"#{slide_idx + 1} {stype}", use_container_width=True)
 
-    # Description
     desc = script.get("description", "")
     if desc:
         with st.expander("Instagram 캡션"):

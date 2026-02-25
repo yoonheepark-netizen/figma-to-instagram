@@ -185,13 +185,36 @@ PRODUCT_IMAGES = {
         "products/bg_gyeongokgo_4.png",
         "products/bg_gyeongokgo_5.png",
         "products/bg_gyeongokgo_6.png",
+        "products/gdrive_gyeongokgo_1.jpg",
+        "products/gdrive_gyeongokgo_2.jpg",
+        "products/gdrive_gyeongokgo_3.jpg",
     ],
     "공진단": [
         "products/bg_gongjindan_1.png",
+        "products/gdrive_gongjindan_1.jpg",
+        "products/gdrive_gongjindan_2.jpg",
+        "products/gdrive_gongjindan_3.jpg",
     ],
-    "우황청심원": [],
-    "녹용": [],
-    "녹용한약": [],
+    "우황청심원": [
+        "products/gdrive_uhwang_1.jpg",
+        "products/gdrive_uhwang_2.jpg",
+        "products/gdrive_uhwang_3.jpg",
+    ],
+    "녹용": [
+        "products/gdrive_nokyong_1.jpg",
+        "products/gdrive_nokyong_2.jpg",
+        "products/gdrive_nokyong_3.jpg",
+    ],
+    "녹용한약": [
+        "products/gdrive_nokyong_1.jpg",
+        "products/gdrive_nokyong_2.jpg",
+        "products/gdrive_nokyong_3.jpg",
+    ],
+    "총명공진단": [
+        "products/gdrive_chongmyeong_1.jpg",
+        "products/gdrive_chongmyeong_2.jpg",
+        "products/gdrive_chongmyeong_3.jpg",
+    ],
 }
 
 

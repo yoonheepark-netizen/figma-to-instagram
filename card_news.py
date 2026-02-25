@@ -75,16 +75,23 @@ _FONT_PATHS = {
         os.path.expanduser("~/Library/Fonts/Pretendard-Bold.otf"),
         os.path.join(_FONT_DIR, "Pretendard-Bold.otf"),
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        # Linux (Streamlit Cloud) — fonts-noto-cjk 패키지
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
     ],
     "semibold": [
         os.path.expanduser("~/Library/Fonts/Pretendard-SemiBold.otf"),
         os.path.join(_FONT_DIR, "Pretendard-SemiBold.otf"),
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
     ],
     "regular": [
         os.path.expanduser("~/Library/Fonts/Pretendard-Regular.otf"),
         os.path.join(_FONT_DIR, "Pretendard-Regular.otf"),
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     ],
     "didot": [
         os.path.join(_FONT_DIR, "GFSDidot-Regular.ttf"),
@@ -104,9 +111,14 @@ def _load_font(role, size):
             try:
                 font = ImageFont.truetype(path, size)
                 _font_cache[key] = font
+                logger.info(f"폰트 로딩 성공: {role}/{size} → {path}")
                 return font
-            except Exception:
+            except Exception as e:
+                logger.warning(f"폰트 로딩 실패: {path} → {e}")
                 continue
+        else:
+            logger.debug(f"폰트 없음: {path}")
+    logger.error(f"폰트 폴백: {role}/{size} → 기본 폰트 (텍스트가 매우 작게 표시됩니다)")
     font = ImageFont.load_default()
     _font_cache[key] = font
     return font

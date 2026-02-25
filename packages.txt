@@ -1,3 +1,4 @@
 tesseract-ocr
 tesseract-ocr-kor
 fonts-noto-cjk
+ffmpeg

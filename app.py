@@ -806,6 +806,36 @@ def render_reels_page():
     st.markdown("##### 🎬 릴스 생성 — 1분건강톡")
     st.caption("주제 입력 → AI 스크립트 → 나레이션(TTS) → 영상 합성까지 한 번에")
 
+    # ── 채널 인사이트 (실제 데이터 기반) ──
+    _insights_path = os.path.join(os.path.dirname(__file__), "assets", "1min_health", "insights_summary.json")
+    if os.path.exists(_insights_path):
+        with open(_insights_path) as _f:
+            _insights = json.load(_f)
+        with st.expander("📊 채널 인사이트 — 바이럴 성공 공식 (66개 릴스 분석)", expanded=False):
+            _acct = _insights.get("account", {})
+            ic1, ic2, ic3, ic4 = st.columns(4)
+            ic1.metric("팔로워", f'{_acct.get("followers", 0):,}')
+            ic2.metric("총 릴스", f'{_acct.get("total_reels", 0)}개')
+            ic3.metric("총 조회수", f'{_acct.get("total_views", 0):,}')
+            ic4.metric("평균 조회수", f'{_acct.get("avg_views", 0):,}')
+
+            st.markdown("**Hook 기법 (데이터 기반)**")
+            for tech, desc in _insights.get("viral_patterns", {}).get("hook_techniques", {}).items():
+                st.caption(f"  {tech}: {desc}")
+
+            st.markdown("**Top 5 바이럴 릴스**")
+            _top_data = []
+            for tp in _insights.get("top_10_posts", [])[:5]:
+                _top_data.append({
+                    "날짜": tp["date"],
+                    "Hook": tp["caption_first_line"][:40],
+                    "조회수": f'{tp["views"]:,}',
+                    "공유": f'{tp["shares"]:,}',
+                    "저장": f'{tp["saved"]:,}',
+                })
+            st.dataframe(_top_data, use_container_width=True, hide_index=True)
+            st.caption("스크립트 생성 시 이 패턴들이 자동으로 반영됩니다.")
+
     # ── 세션 초기화 ──
     for key, default in [
         ("rl_script", None),

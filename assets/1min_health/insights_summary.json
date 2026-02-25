@@ -1,0 +1,152 @@
+{
+  "account": {
+    "username": "1min_health_tok",
+    "name": "1분건강톡",
+    "followers": 4890,
+    "total_reels": 66,
+    "total_views": 14712205,
+    "avg_views": 222912,
+    "period": "2024-11-25 ~ 2025-04-23"
+  },
+  "viral_patterns": {
+    "hook_techniques": {
+      "숫자/통계": "33% - '무려 83%가...', '2분이면...'",
+      "질문형": "29% - '불면증?', '이거 혹시 나도?'",
+      "충격/경고": "18% - '🚨', '필수 시청!', '당장 안 하면...'",
+      "공감/자기동일시": "11% - '지금 구부정하게...', '지금 핸드폰 보는 사람...'"
+    },
+    "caption_length": "200자 미만 = 바이럴 3배",
+    "share_vs_save": "공유 우세 = 메가 바이럴 (알고리즘 증폭)",
+    "signature": "언젠간 쓸데가 있어요, 세상의 모든 건강 이야기",
+    "cta": "👉👉 @1min_health_tok 팔로우하기 👈👈",
+    "base_hashtags": [
+      "#1분건강톡",
+      "#건강정보",
+      "#건강꿀팁",
+      "#건강",
+      "#건강소식",
+      "#건강이슈",
+      "#의학"
+    ]
+  },
+  "top_categories": {
+    "의학/질환": 45,
+    "운동/피트니스": 30,
+    "다이어트/식단": 21,
+    "멘탈/동기부여": 16,
+    "육아/소아": 8,
+    "셀럽/화제": 8
+  },
+  "top_10_posts": [
+    {
+      "date": "2025-03-30",
+      "caption_first_line": "지금 구부정하게 휴대폰보거나! 모니터 보는 사람들 필수 시청!",
+      "views": 3209912,
+      "shares": 55702,
+      "saved": 2738,
+      "likes": 16285,
+      "viral_score": 335596.1,
+      "engagement_rate": 3.57,
+      "permalink": "https://www.instagram.com/reel/DH0i7MhT6RQ/"
+    },
+    {
+      "date": "2025-02-19",
+      "caption_first_line": "아이들이 잘못을 이해하고 반성해서 그만두는 것이 아니라",
+      "views": 1930337,
+      "shares": 17749,
+      "saved": 8275,
+      "likes": 21321,
+      "viral_score": 155940.4,
+      "engagement_rate": 3.21,
+      "permalink": "https://www.instagram.com/reel/DGPuOO-zMKH/"
+    },
+    {
+      "date": "2024-12-04",
+      "caption_first_line": "스쿼트는 전반적인 하체 근육을 모두 키울 수 있는 기본적인 하체 운동입니다. 먼저 양발을 어깨너비로 벌리고 서서 최대한 앉습니다. 이때 무릎 각",
+      "views": 2411921,
+      "shares": 9030,
+      "saved": 19425,
+      "likes": 16245,
+      "viral_score": 144137.2,
+      "engagement_rate": 2.51,
+      "permalink": "https://www.instagram.com/reel/DDJbTZXzi7l/"
+    },
+    {
+      "date": "2024-11-30",
+      "caption_first_line": "🚨생화학자이자 뉴욕 베스트셀러 작가, 제시 인차우스페가 전하는 혈당 잡는 꿀팁🚨",
+      "views": 1317787,
+      "shares": 12191,
+      "saved": 16251,
+      "likes": 10919,
+      "viral_score": 133994.9,
+      "engagement_rate": 4.4,
+      "permalink": "https://www.instagram.com/reel/DC-zjDvTVst/"
+    },
+    {
+      "date": "2025-04-14",
+      "caption_first_line": "불면증? 미국 특수부대는 2분이면 잔다.😪😪 💤 미군 파일럿들이 실전에서 쓰는 수면법, 진짜 효과 있음. 6주 연습 시, 96%가 2분 안에 잠",
+      "views": 1045785,
+      "shares": 7352,
+      "saved": 7650,
+      "likes": 6012,
+      "viral_score": 76343.9,
+      "engagement_rate": 2.67,
+      "permalink": "https://www.instagram.com/reel/DIcdTCbTfKI/"
+    },
+    {
+      "date": "2025-01-11",
+      "caption_first_line": "신동엽이 평소 스트레스를 대하는 자세는?",
+      "views": 1013252,
+      "shares": 6202,
+      "saved": 6428,
+      "likes": 12897,
+      "viral_score": 73501.5,
+      "engagement_rate": 3.39,
+      "permalink": "https://www.instagram.com/reel/DEqxe_JT6D6/"
+    },
+    {
+      "date": "2025-01-09",
+      "caption_first_line": "🍕피자, 맥주는 이런 사람들만 드세요…🍺",
+      "views": 986622,
+      "shares": 10658,
+      "saved": 1300,
+      "likes": 5432,
+      "viral_score": 72850.2,
+      "engagement_rate": 2.34,
+      "permalink": "https://www.instagram.com/reel/DEmMGdxzUQo/"
+    },
+    {
+      "date": "2024-12-17",
+      "caption_first_line": "🤚소아비만의 원인 ✋",
+      "views": 406131,
+      "shares": 8701,
+      "saved": 1749,
+      "likes": 4419,
+      "viral_score": 57418.3,
+      "engagement_rate": 4.76,
+      "permalink": "https://www.instagram.com/reel/DDrBAShz9F3/"
+    },
+    {
+      "date": "2025-02-15",
+      "caption_first_line": "”일하기 싫어요“ 라는 말에 진심 어린 말을 전하는 스님",
+      "views": 908205,
+      "shares": 2910,
+      "saved": 4532,
+      "likes": 11207,
+      "viral_score": 48553.1,
+      "engagement_rate": 2.6,
+      "permalink": "https://www.instagram.com/reel/DGE9Slpybe_/"
+    },
+    {
+      "date": "2024-12-14",
+      "caption_first_line": "식욕 터지는 날, 살 찌는 음식 대신 건강한 음식 드세요!",
+      "views": 94161,
+      "shares": 1700,
+      "saved": 1647,
+      "likes": 844,
+      "viral_score": 15238.6,
+      "engagement_rate": 6.84,
+      "permalink": "https://www.instagram.com/reel/DDiqrMtzZsA/"
+    }
+  ]
+}

@@ -1009,7 +1009,7 @@ def suggest_topics(include_news: bool = True, refresh_seed: int = 0) -> list[dic
         sug["label"] = f"{emoji} {short_topic}"
 
     suggestions.sort(key=lambda x: x["score"], reverse=True)
-    return suggestions[:15]
+    return suggestions[:20]
 
 
 # ═══════════════════════════════════════════════════════════

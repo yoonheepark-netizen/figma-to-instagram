@@ -408,55 +408,50 @@ def render_cardnews_page():
         refresh_seed=st.session_state.get("sug_refresh_count", 0),
     )
     if suggestions:
-        # 3행 x 4열 카드 레이아웃 (최대 12개 표시)
-        display = suggestions[:12]
-        num_cols = 4
+        # 콤팩트 칩 레이아웃: 5열 × 최대 4행 = 20개
+        display = suggestions[:20]
+        _src_emoji = {
+            "monthly": "📅", "solar": "🗓️", "season": "🌿",
+            "trend": "🔥", "news": "📰",
+            "google_trend": "🔍", "google_trend_general": "🔍",
+            "x_trend": "𝕏",
+            "naver_trend": "🅽", "naver_trend_general": "🅽",
+        }
+        num_cols = 5
         for row_start in range(0, len(display), num_cols):
             row_items = display[row_start:row_start + num_cols]
             cols = st.columns(num_cols)
             for idx_in_row, sug in enumerate(row_items):
                 global_idx = row_start + idx_in_row
                 with cols[idx_in_row]:
-                    with st.container(border=True):
-                        # 상단: 태그 + 점수 바
-                        score = sug.get("score", 0)
-                        src = sug.get("source_type", "")
-                        # 소스별 이모지
-                        src_emoji = {"monthly": "📅", "solar": "🗓️", "season": "🌿",
-                                     "trend": "🔥", "news": "📰",
-                                     "google_trend": "🔍", "google_trend_general": "🔍",
-                                     "x_trend": "𝕏",
-                                     "naver_trend": "🅽", "naver_trend_general": "🅽",
-                                     }.get(src, "📌")
-                        tag_short = sug["tag"][:8]
-                        st.markdown(
-                            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-                            f"<span style='font-size:12px;color:#888'>{src_emoji} {tag_short}</span>"
-                            f"<span style='font-size:13px;font-weight:bold;color:{'#e74c3c' if score >= 80 else '#f39c12' if score >= 60 else '#95a5a6'}'>"
-                            f"{score}점</span></div>",
-                            unsafe_allow_html=True,
-                        )
-                        # 제목 (마크다운 기호 제거)
-                        clean_topic = sug["topic"].replace("**", "").replace("*", "").replace("__", "")
-                        topic_display = clean_topic[:28] + ("..." if len(clean_topic) > 28 else "")
-                        st.markdown(f"**{topic_display}**")
-                        # 추천 사유
-                        reason = sug.get("reason", "")
-                        if reason:
-                            st.caption(reason[:35])
-                        # 제품 연결
-                        product = sug.get("product", "")
-                        if product and product != "없음":
-                            st.caption(f"→ {product}")
-                        # 선택 버튼
-                        news_tag = sug["tag"] if src == "news" else ""
-                        st.button(
-                            "선택",
-                            key=f"cn_sug_{global_idx}",
-                            use_container_width=True,
-                            on_click=_set_topic,
-                            args=(sug["topic"], news_tag),
-                        )
+                    score = sug.get("score", 0)
+                    src = sug.get("source_type", "")
+                    emoji = _src_emoji.get(src, "📌")
+                    score_color = "#e74c3c" if score >= 80 else "#f39c12" if score >= 60 else "#95a5a6"
+                    clean_topic = sug["topic"].replace("**", "").replace("*", "").replace("__", "")
+                    topic_short = clean_topic[:22] + ("…" if len(clean_topic) > 22 else "")
+                    reason = sug.get("reason", "")[:25]
+                    product = sug.get("product", "")
+                    prod_txt = f" · {product}" if product and product != "없음" else ""
+                    news_tag = sug["tag"] if src == "news" else ""
+                    # 콤팩트 카드: 점수+태그 한줄, 제목, 사유+제품 한줄, 버튼
+                    st.markdown(
+                        f"<div style='border:1px solid #e0e0e0;border-radius:8px;padding:8px 10px;margin-bottom:4px'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:2px'>"
+                        f"<span style='font-size:11px;color:#999'>{emoji} {sug['tag'][:6]}</span>"
+                        f"<span style='font-size:11px;font-weight:700;color:{score_color}'>{score}</span></div>"
+                        f"<div style='font-size:13px;font-weight:600;line-height:1.3;margin-bottom:3px'>{topic_short}</div>"
+                        f"<div style='font-size:10px;color:#aaa;line-height:1.2'>{reason}{prod_txt}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.button(
+                        "선택",
+                        key=f"cn_sug_{global_idx}",
+                        use_container_width=True,
+                        on_click=_set_topic,
+                        args=(sug["topic"], news_tag),
+                    )
 
     # 현재 계절/절기 표시
     season = detect_season()

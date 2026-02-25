@@ -383,15 +383,30 @@ def render_cardnews_page():
     # ── 추천 주제 (시즌/절기/트렌드/뉴스 통합) ──
     sug_header_col, sug_refresh_col = st.columns([6, 1])
     with sug_header_col:
-        st.caption("📌 추천 주제 — 점수순 · 클릭하면 주제 힌트에 자동 입력")
+        # 마지막 업데이트 시각
+        from cardnews_generator import _news_cache
+        last_ts = _news_cache.get("gtrend_ts", 0) or _news_cache.get("xtrend_ts", 0)
+        if last_ts:
+            from datetime import datetime as _dt
+            updated = _dt.fromtimestamp(last_ts).strftime("%H:%M")
+            st.caption(f"📌 추천 주제 — 점수순 · 클릭하면 자동 입력 · 🕐 {updated} 업데이트")
+        else:
+            st.caption("📌 추천 주제 — 점수순 · 클릭하면 주제 힌트에 자동 입력")
     with sug_refresh_col:
-        if st.button("🔄", key="cn_refresh_all", help="추천 주제 + 뉴스 새로고침"):
-            from cardnews_generator import _news_cache
-            _news_cache["timestamp"] = 0
-            _news_cache["fast_topics"] = []
+        if st.button("🔄", key="cn_refresh_all", help="추천 주제 + 트렌드 새로고침"):
+            from cardnews_generator import _news_cache, _trend_convert_cache
+            # 모든 캐시 완전 초기화
+            _news_cache.clear()
+            _news_cache["timestamp"] = 0.0
+            _trend_convert_cache.clear()
+            # 새로고침 시드 변경용
+            st.session_state["sug_refresh_count"] = st.session_state.get("sug_refresh_count", 0) + 1
             st.rerun()
 
-    suggestions = suggest_topics(include_news=True)
+    suggestions = suggest_topics(
+        include_news=True,
+        refresh_seed=st.session_state.get("sug_refresh_count", 0),
+    )
     if suggestions:
         # 3행 x 4열 카드 레이아웃 (최대 12개 표시)
         display = suggestions[:12]

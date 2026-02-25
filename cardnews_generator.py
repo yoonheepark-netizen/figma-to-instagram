@@ -642,11 +642,13 @@ def _fetch_x_trends() -> list[str]:
         return _news_cache.get("x_trends", [])
 
 
-def suggest_topics(include_news: bool = True) -> list[dict]:
+def suggest_topics(include_news: bool = True, refresh_seed: int = 0) -> list[dict]:
     """현재 시즌/절기/트렌드 + 월별 이벤트 + 뉴스 기반 주제 추천
 
+    Args:
+        include_news: 뉴스/트렌드 자동 로드
+        refresh_seed: 새로고침 시 달라지는 시드값 (0이면 시간 기반)
     Returns: score 내림차순 정렬된 추천 주제 리스트
-    [{"label", "topic", "tag", "product", "reason", "score", "source_type"}, ...]
     """
     season = detect_season()
     now = datetime.now()
@@ -654,8 +656,9 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
     suggestions = []
 
     import random
-    day_seed = now.strftime("%Y-%m-%d")
-    rng = random.Random(day_seed)
+    # 새로고침할 때마다 다른 큐레이션 주제가 나오도록 시드 변경
+    seed = f"{now.strftime('%Y-%m-%d-%H')}-{refresh_seed}"
+    rng = random.Random(seed)
 
     # 1) 월별 이벤트/트렌드 주제 (최우선)
     monthly = list(_MONTHLY_EVENTS.get(month, []))
@@ -787,7 +790,7 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
 
 # 모듈 레벨 캐시 (Streamlit 리런마다 재호출 방지)
 _news_cache: dict = {"data": [], "headlines": {}, "timestamp": 0.0}
-_NEWS_CACHE_TTL = 1800  # 30분
+_NEWS_CACHE_TTL = 600  # 10분
 
 _NEWS_FEEDS = [
     {

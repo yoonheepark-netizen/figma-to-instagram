@@ -469,8 +469,10 @@ def _calc_topic_score(topic: str, tag: str, product: str, source_type: str) -> i
         score += 25
     elif source_type in ("google_trend", "x_trend", "naver_trend"):
         score += 24  # 실시간 트렌드 = 높은 시의성
-    elif source_type in ("google_trend_general", "naver_trend_general"):
-        score += 22  # 일반 트렌드 → 건강 변환
+    elif source_type == "naver_trend_general":
+        score += 24  # 네이버 실검 = 한국 사용자 관심 최고
+    elif source_type == "google_trend_general":
+        score += 22  # 구글 일반 트렌드
     elif source_type == "news":
         score += 22  # 실시간 뉴스도 시의성 높음
     elif source_type == "season":
@@ -505,8 +507,10 @@ def _calc_topic_score(topic: str, tag: str, product: str, source_type: str) -> i
         score += 14  # X 건강 트렌드
     elif source_type == "news":
         score += 13
-    elif source_type in ("google_trend_general", "naver_trend_general"):
-        score += 10  # 일반 트렌드 → 건강 변환
+    elif source_type == "naver_trend_general":
+        score += 13  # 네이버 실검 = 높은 실시간성
+    elif source_type == "google_trend_general":
+        score += 10  # 구글 일반 트렌드
     elif source_type == "monthly":
         score += 11
     elif source_type in ("solar", "season"):
@@ -930,7 +934,7 @@ def suggest_topics(include_news: bool = True, refresh_seed: int = 0) -> list[dic
 
         naver_trends = _fetch_naver_trends()
         _n_health_items = [nt for nt in naver_trends if nt.get("is_health")]
-        _n_general_items = [nt for nt in naver_trends if not nt.get("is_health")][:3]
+        _n_general_items = [nt for nt in naver_trends if not nt.get("is_health")][:5]
         all_general_kw += [nt["keyword"] for nt in _n_general_items]
 
     # 일반 트렌드 키워드를 LLM으로 건강 주제 변환 (배치 1회 호출)
@@ -1009,7 +1013,36 @@ def suggest_topics(include_news: bool = True, refresh_seed: int = 0) -> list[dic
         sug["label"] = f"{emoji} {short_topic}"
 
     suggestions.sort(key=lambda x: x["score"], reverse=True)
-    return suggestions[:20]
+
+    # 네이버/구글/X 트렌드 최소 보장: 상위 20개에 각 소스가 골고루 포함되도록
+    result = []
+    remainder = []
+    naver_count = 0
+    for sug in suggestions:
+        src = sug.get("source_type", "")
+        is_naver = src in ("naver_trend", "naver_trend_general")
+        if is_naver:
+            naver_count += 1
+        if len(result) < 20:
+            result.append(sug)
+        else:
+            remainder.append(sug)
+
+    # 네이버 트렌드가 결과에 3개 미만이면, 하위 항목을 네이버로 교체
+    if naver_count < 3:
+        naver_in_remainder = [s for s in remainder
+                              if s.get("source_type", "") in ("naver_trend", "naver_trend_general")]
+        for nv in naver_in_remainder:
+            if naver_count >= 3:
+                break
+            # 결과의 마지막(가장 낮은 점수) 비네이버 항목과 교체
+            for i in range(len(result) - 1, -1, -1):
+                if result[i].get("source_type", "") not in ("naver_trend", "naver_trend_general"):
+                    result[i] = nv
+                    naver_count += 1
+                    break
+
+    return result[:20]
 
 
 # ═══════════════════════════════════════════════════════════

@@ -416,12 +416,15 @@ def _build_reason(tag: str, source_type: str, month: int, extra: str = "") -> st
             return f"{base} · {extra[:20]}"
         return base
     if source_type == "google_trend_general":
-        base = "🔍 구글 인기 검색어"
+        base = "🔍 구글 인기 검색어 → 건강 연결"
         if extra:
-            return f"{base} · 검색량 {extra}"
+            return f"{base} · {extra[:25]}"
         return base
     if source_type == "x_trend":
-        return "𝕏 실시간 트렌드 · 건강 이슈"
+        base = "𝕏 실시간 트렌드"
+        if extra:
+            return f"{base} · {extra[:25]}"
+        return f"{base} · 건강 이슈"
     if source_type == "news":
         base = "📰 실시간 구글 뉴스 트렌드"
         if extra:
@@ -493,6 +496,59 @@ _HEALTH_KEYWORDS = [
     "보약", "공진단", "경옥고", "녹용", "한약", "보양", "면역력",
     "피로", "수면질", "노화", "콜레스테롤", "혈당", "관절",
 ]
+
+# ── 트렌드 키워드 → 건강 주제 변환 캐시 ──
+_trend_convert_cache: dict = {}
+
+
+def _convert_trends_to_health(keywords: list[str]) -> dict[str, str]:
+    """트렌드 키워드 리스트를 건강/웰빙 관점의 카드뉴스 주제로 변환 (LLM 배치 호출).
+
+    Returns: {원본 키워드: 변환된 주제} 매핑
+    """
+    global _trend_convert_cache
+    # 이미 변환된 것 제외
+    to_convert = [kw for kw in keywords if kw not in _trend_convert_cache]
+    if not to_convert:
+        return {kw: _trend_convert_cache[kw] for kw in keywords if kw in _trend_convert_cache}
+
+    system = """당신은 인스타그램 건강 카드뉴스 편집자입니다.
+실시간 트렌드 키워드를 받아, 각 키워드와 연결되는 건강/웰빙 카드뉴스 주제를 만들어주세요.
+
+## 규칙
+- 트렌드 키워드의 맥락을 살려 자연스럽게 건강 주제로 연결
+- 억지 연결 금지. 자연스럽고 흥미로운 연결이어야 함
+- 15~30자 이내의 후킹 헤드라인 형태
+- 질문형 또는 숫자 포함 권장
+- 해요체 금지 (헤드라인이므로 명사형/체언형)
+- 반드시 JSON만 출력: {"키워드1": "변환 주제1", "키워드2": "변환 주제2"}
+
+## 예시
+- "퇴사" → "번아웃 증후군, 한의학이 말하는 기력 회복 3단계"
+- "인천대" → "대학생 시험기간, 뇌 피로 푸는 5분 지압법"
+- "봄동비빔밥" → "봄동의 숨은 영양소, 간 해독에 좋은 이유"
+- "위버스콘" → "콘서트 후 성대 관리법, 목 보호하는 3가지 습관"
+- "개인이동" → "출퇴근 걷기 vs 자전거, 칼로리 소모 비교"
+"""
+    user = f"다음 트렌드 키워드들을 건강 주제로 변환해주세요:\n{json.dumps(to_convert, ensure_ascii=False)}"
+
+    raw = _call_llm(system, user, temperature=0.7, max_tokens=1000)
+    if raw:
+        try:
+            match = re.search(r"\{[\s\S]*\}", raw)
+            if match:
+                result = json.loads(match.group(0))
+                for kw, topic in result.items():
+                    _trend_convert_cache[kw] = topic
+        except (json.JSONDecodeError, AttributeError):
+            logger.warning("트렌드→건강 주제 변환 파싱 실패")
+
+    # 변환 실패한 것은 기본 패턴 적용
+    for kw in to_convert:
+        if kw not in _trend_convert_cache:
+            _trend_convert_cache[kw] = f"{kw}, 건강과의 의외의 연결고리"
+
+    return {kw: _trend_convert_cache[kw] for kw in keywords if kw in _trend_convert_cache}
 
 
 def _fetch_google_trends() -> list[dict]:
@@ -646,12 +702,30 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
         news = _fetch_news_fast()
         suggestions += news
 
-    # 6) 구글 검색 트렌드 (건강 우선, 일반도 최소 3개 포함)
+    # 6) 구글 검색 트렌드 + 7) X 트렌드 — 일반 키워드는 건강 주제로 변환
+    all_general_kw = []  # 변환 대상 수집
+    _g_health_items, _g_general_items = [], []
+    _x_health_items, _x_general_items = [], []
+
     if include_news:
         gtrends = _fetch_google_trends()
-        g_health = [gt for gt in gtrends if gt.get("is_health")]
-        g_general = [gt for gt in gtrends if not gt.get("is_health")]
-        for gt in g_health:
+        _g_health_items = [gt for gt in gtrends if gt.get("is_health")]
+        _g_general_items = [gt for gt in gtrends if not gt.get("is_health")][:3]
+        all_general_kw += [gt["keyword"] for gt in _g_general_items]
+
+        x_trends = _fetch_x_trends()
+        _x_health_items = [t for t in x_trends if any(kw in t for kw in _HEALTH_KEYWORDS)]
+        _x_general_items = [t for t in x_trends if not any(kw in t for kw in _HEALTH_KEYWORDS)][:2]
+        all_general_kw += _x_general_items
+
+    # 일반 트렌드 키워드를 LLM으로 건강 주제 변환 (배치 1회 호출)
+    converted = {}
+    if all_general_kw:
+        converted = _convert_trends_to_health(all_general_kw)
+
+    if include_news:
+        # 구글 트렌드 — 건강 관련
+        for gt in _g_health_items:
             suggestions.append({
                 "topic": gt["keyword"],
                 "tag": "구글트렌드",
@@ -659,33 +733,31 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
                 "source_type": "google_trend",
                 "news_ref": gt.get("news_ref", ""),
             })
-        for gt in g_general[:max(3, 3 - len(g_health))]:
+        # 구글 트렌드 — 일반 → 건강 변환
+        for gt in _g_general_items:
             suggestions.append({
-                "topic": gt["keyword"],
+                "topic": converted.get(gt["keyword"], gt["keyword"]),
                 "tag": "구글트렌드",
                 "product": "없음",
                 "source_type": "google_trend_general",
-                "news_ref": gt.get("traffic", ""),
+                "news_ref": f"🔍 {gt['keyword']}",
             })
-
-    # 7) X(트위터) 트렌드 (건강 우선, 일반도 최소 2개 포함)
-    if include_news:
-        x_trends = _fetch_x_trends()
-        x_health = [t for t in x_trends if any(kw in t for kw in _HEALTH_KEYWORDS)]
-        x_general = [t for t in x_trends if not any(kw in t for kw in _HEALTH_KEYWORDS)]
-        for t in x_health[:3]:
+        # X 트렌드 — 건강 관련
+        for t in _x_health_items[:3]:
             suggestions.append({
                 "topic": t,
                 "tag": "X트렌드",
                 "product": "없음",
                 "source_type": "x_trend",
             })
-        for t in x_general[:max(2, 2 - len(x_health))]:
+        # X 트렌드 — 일반 → 건강 변환
+        for t in _x_general_items:
             suggestions.append({
-                "topic": t,
+                "topic": converted.get(t, t),
                 "tag": "X트렌드",
                 "product": "없음",
                 "source_type": "x_trend",
+                "news_ref": f"𝕏 {t}",
             })
 
     # ── 점수 + 사유 계산 후 정렬 ──

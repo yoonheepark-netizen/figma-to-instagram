@@ -10,11 +10,14 @@ Figma 2025 원본 좌표 기반 (1080x1350):
 Unsplash: 영어 키워드 자동 변환 후 검색.
 """
 import io
+import logging
 import os
 import random
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
 
 # ── 브랜드 컬러 (Figma 2025 원본) ────────────────────────
 

@@ -341,8 +341,14 @@ def _calc_topic_score(topic: str, tag: str, product: str, source_type: str) -> i
     score += min(hook_score, 20)
 
     # 4) 트렌드 신선도 (15점)
-    if source_type == "news":
-        score += 14
+    if source_type == "google_trend":
+        score += 15  # 구글 건강 트렌드 = 최고 신선도
+    elif source_type == "x_trend":
+        score += 14  # X 건강 트렌드
+    elif source_type == "news":
+        score += 13
+    elif source_type == "google_trend_general":
+        score += 10  # 구글 일반 트렌드
     elif source_type == "monthly":
         score += 11
     elif source_type in ("solar", "season"):
@@ -400,8 +406,20 @@ _REASON_MAP = {
 
 def _build_reason(tag: str, source_type: str, month: int, extra: str = "") -> str:
     """추천 사유 텍스트 생성"""
+    if source_type == "google_trend":
+        base = "🔍 구글 실시간 검색 트렌드"
+        if extra:
+            return f"{base} · {extra[:20]}"
+        return base
+    if source_type == "google_trend_general":
+        base = "🔍 구글 인기 검색어"
+        if extra:
+            return f"{base} · 검색량 {extra}"
+        return base
+    if source_type == "x_trend":
+        return "𝕏 실시간 트렌드 · 건강 이슈"
     if source_type == "news":
-        base = "실시간 구글 뉴스 트렌드"
+        base = "📰 실시간 구글 뉴스 트렌드"
         if extra:
             return f"{base} · {extra[:20]}"
         return base
@@ -461,6 +479,104 @@ def _fetch_news_fast() -> list[dict]:
     _news_cache["timestamp"] = now_ts
 
     return results
+
+
+_HEALTH_KEYWORDS = [
+    "건강", "의료", "약", "병원", "운동", "다이어트", "영양", "수면",
+    "면역", "피부", "비타민", "스트레스", "체중", "혈압", "당뇨",
+    "감기", "독감", "코로나", "백신", "치료", "질병", "식품",
+    "알레르기", "일교차", "헬스", "요가", "필라테스", "한의",
+    "보약", "공진단", "경옥고", "녹용", "한약", "보양", "면역력",
+    "피로", "수면질", "노화", "콜레스테롤", "혈당", "관절",
+]
+
+
+def _fetch_google_trends() -> list[dict]:
+    """구글 트렌드 RSS에서 한국 실시간 인기 검색어 가져오기 (인증 불필요)"""
+    global _news_cache
+    now_ts = time.time()
+
+    cached = _news_cache.get("google_trends")
+    if cached and (now_ts - _news_cache.get("gtrend_ts", 0)) < _NEWS_CACHE_TTL:
+        return cached
+
+    try:
+        url = "https://trends.google.com/trending/rss?geo=KR"
+        ns = {"ht": "https://trends.google.com/trending/rss"}
+        resp = _requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+
+        results = []
+        for item in root.findall(".//item"):
+            title_el = item.find("title")
+            title = title_el.text if title_el is not None else ""
+            if not title:
+                continue
+
+            traffic_el = item.find("ht:approx_traffic", ns)
+            traffic = traffic_el.text if traffic_el is not None else ""
+
+            # 관련 뉴스 제목 수집
+            news_texts = []
+            for ni in item.findall("ht:news_item", ns):
+                ni_title = ni.find("ht:news_item_title", ns)
+                if ni_title is not None and ni_title.text:
+                    news_texts.append(ni_title.text)
+
+            # 건강 키워드 매칭 (제목 + 뉴스 전체)
+            all_text = title + " " + " ".join(news_texts)
+            is_health = any(kw in all_text for kw in _HEALTH_KEYWORDS)
+
+            results.append({
+                "keyword": title,
+                "traffic": traffic,
+                "is_health": is_health,
+                "news_ref": news_texts[0][:25] if news_texts else "",
+            })
+
+        _news_cache["google_trends"] = results
+        _news_cache["gtrend_ts"] = now_ts
+        return results
+    except Exception as e:
+        logger.warning(f"구글 트렌드 가져오기 실패: {e}")
+        return _news_cache.get("google_trends", [])
+
+
+def _fetch_x_trends() -> list[str]:
+    """X(트위터) 한국 실시간 트렌드 가져오기 (trends24.in 스크래핑, 인증 불필요)"""
+    global _news_cache
+    now_ts = time.time()
+
+    cached = _news_cache.get("x_trends")
+    if cached and (now_ts - _news_cache.get("xtrend_ts", 0)) < _NEWS_CACHE_TTL:
+        return cached
+
+    try:
+        url = "https://trends24.in/korea/"
+        resp = _requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Safari/537.36",
+        })
+        resp.raise_for_status()
+        raw = re.findall(r"<li[^>]*>\s*<a[^>]*>([^<]+)</a>", resp.text)
+
+        seen = set()
+        trends = []
+        for t in raw:
+            t = t.strip()
+            if t and t not in seen and len(t) > 1:
+                seen.add(t)
+                trends.append(t)
+
+        trends = trends[:30]
+        _news_cache["x_trends"] = trends
+        _news_cache["xtrend_ts"] = now_ts
+        return trends
+    except Exception as e:
+        logger.warning(f"X 트렌드 가져오기 실패: {e}")
+        return _news_cache.get("x_trends", [])
 
 
 def suggest_topics(include_news: bool = True) -> list[dict]:
@@ -524,6 +640,41 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
     if include_news:
         news = _fetch_news_fast()
         suggestions += news
+
+    # 6) 구글 검색 트렌드
+    if include_news:
+        gtrends = _fetch_google_trends()
+        for gt in gtrends:
+            # 건강 관련이면 높은 점수, 아니어도 일반 트렌드로 포함
+            if gt.get("is_health"):
+                suggestions.append({
+                    "topic": gt["keyword"],
+                    "tag": "구글트렌드",
+                    "product": "없음",
+                    "source_type": "google_trend",
+                    "news_ref": gt.get("news_ref", ""),
+                })
+            elif len(suggestions) < 12:
+                # 비건강 트렌드도 최대 2개까지 포함 (인사이트용)
+                suggestions.append({
+                    "topic": gt["keyword"],
+                    "tag": "구글트렌드",
+                    "product": "없음",
+                    "source_type": "google_trend_general",
+                    "news_ref": gt.get("traffic", ""),
+                })
+
+    # 7) X(트위터) 트렌드
+    if include_news:
+        x_trends = _fetch_x_trends()
+        x_health = [t for t in x_trends if any(kw in t for kw in _HEALTH_KEYWORDS)]
+        for t in x_health[:3]:
+            suggestions.append({
+                "topic": t,
+                "tag": "X트렌드",
+                "product": "없음",
+                "source_type": "x_trend",
+            })
 
     # ── 점수 + 사유 계산 후 정렬 ──
     tag_emoji = {

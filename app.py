@@ -408,7 +408,9 @@ def render_cardnews_page():
                         src = sug.get("source_type", "")
                         # 소스별 이모지
                         src_emoji = {"monthly": "📅", "solar": "🗓️", "season": "🌿",
-                                     "trend": "🔥", "news": "📰"}.get(src, "📌")
+                                     "trend": "🔥", "news": "📰",
+                                     "google_trend": "🔍", "google_trend_general": "🔍",
+                                     "x_trend": "𝕏"}.get(src, "📌")
                         tag_short = sug["tag"][:8]
                         st.markdown(
                             f"<div style='display:flex;justify-content:space-between;align-items:center'>"

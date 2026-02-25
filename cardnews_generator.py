@@ -313,10 +313,14 @@ def _calc_topic_score(topic: str, tag: str, product: str, source_type: str) -> i
         score += 28  # 월별 이벤트는 시즌 최고
     elif source_type == "solar":
         score += 25
-    elif source_type == "season":
-        score += 20
+    elif source_type in ("google_trend", "x_trend"):
+        score += 24  # 실시간 트렌드 = 높은 시의성
+    elif source_type == "google_trend_general":
+        score += 22  # 구글 일반 트렌드
     elif source_type == "news":
         score += 22  # 실시간 뉴스도 시의성 높음
+    elif source_type == "season":
+        score += 20
     else:
         score += 15  # 트렌드 (연중)
 
@@ -560,6 +564,7 @@ def _fetch_x_trends() -> list[str]:
                           "Chrome/120.0.0.0 Safari/537.36",
         })
         resp.raise_for_status()
+        resp.encoding = "utf-8"
         raw = re.findall(r"<li[^>]*>\s*<a[^>]*>([^<]+)</a>", resp.text)
 
         seen = set()
@@ -641,34 +646,41 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
         news = _fetch_news_fast()
         suggestions += news
 
-    # 6) 구글 검색 트렌드
+    # 6) 구글 검색 트렌드 (건강 우선, 일반도 최소 3개 포함)
     if include_news:
         gtrends = _fetch_google_trends()
-        for gt in gtrends:
-            # 건강 관련이면 높은 점수, 아니어도 일반 트렌드로 포함
-            if gt.get("is_health"):
-                suggestions.append({
-                    "topic": gt["keyword"],
-                    "tag": "구글트렌드",
-                    "product": "없음",
-                    "source_type": "google_trend",
-                    "news_ref": gt.get("news_ref", ""),
-                })
-            elif len(suggestions) < 12:
-                # 비건강 트렌드도 최대 2개까지 포함 (인사이트용)
-                suggestions.append({
-                    "topic": gt["keyword"],
-                    "tag": "구글트렌드",
-                    "product": "없음",
-                    "source_type": "google_trend_general",
-                    "news_ref": gt.get("traffic", ""),
-                })
+        g_health = [gt for gt in gtrends if gt.get("is_health")]
+        g_general = [gt for gt in gtrends if not gt.get("is_health")]
+        for gt in g_health:
+            suggestions.append({
+                "topic": gt["keyword"],
+                "tag": "구글트렌드",
+                "product": "없음",
+                "source_type": "google_trend",
+                "news_ref": gt.get("news_ref", ""),
+            })
+        for gt in g_general[:max(3, 3 - len(g_health))]:
+            suggestions.append({
+                "topic": gt["keyword"],
+                "tag": "구글트렌드",
+                "product": "없음",
+                "source_type": "google_trend_general",
+                "news_ref": gt.get("traffic", ""),
+            })
 
-    # 7) X(트위터) 트렌드
+    # 7) X(트위터) 트렌드 (건강 우선, 일반도 최소 2개 포함)
     if include_news:
         x_trends = _fetch_x_trends()
         x_health = [t for t in x_trends if any(kw in t for kw in _HEALTH_KEYWORDS)]
+        x_general = [t for t in x_trends if not any(kw in t for kw in _HEALTH_KEYWORDS)]
         for t in x_health[:3]:
+            suggestions.append({
+                "topic": t,
+                "tag": "X트렌드",
+                "product": "없음",
+                "source_type": "x_trend",
+            })
+        for t in x_general[:max(2, 2 - len(x_health))]:
             suggestions.append({
                 "topic": t,
                 "tag": "X트렌드",
@@ -679,6 +691,7 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
     # ── 점수 + 사유 계산 후 정렬 ──
     tag_emoji = {
         "트렌드": "🔥", "건강뉴스": "📰", "연예뉴스": "🎬", "생활뉴스": "🏠",
+        "구글트렌드": "🔍", "X트렌드": "𝕏",
     }
     for sug in suggestions:
         src = sug.get("source_type", "trend")
@@ -691,7 +704,7 @@ def suggest_topics(include_news: bool = True) -> list[dict]:
         sug["label"] = f"{emoji} {short_topic}"
 
     suggestions.sort(key=lambda x: x["score"], reverse=True)
-    return suggestions[:10]
+    return suggestions[:15]
 
 
 # ═══════════════════════════════════════════════════════════

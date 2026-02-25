@@ -360,9 +360,14 @@ class CardNewsRenderer:
             if not para.strip():
                 lines.append("")
                 continue
+            # 공백이 거의 없는 한글 텍스트는 바로 글자 단위 줄바꿈
+            if self._text_w_ls(draw, para.strip(), font, ls) <= max_w:
+                lines.append(para.strip())
+                continue
             words = para.split()
-            if not words:
-                lines.append("")
+            if len(words) <= 1:
+                # 공백 없는 긴 문자열 → 글자 단위 줄바꿈
+                lines.extend(self._wrap_chars_ls(draw, para.strip(), font, max_w, ls))
                 continue
             cur = words[0]
             for w in words[1:]:
@@ -370,7 +375,10 @@ class CardNewsRenderer:
                 if self._text_w_ls(draw, test, font, ls) <= max_w:
                     cur = test
                 else:
-                    lines.append(cur)
+                    if self._text_w_ls(draw, cur, font, ls) > max_w:
+                        lines.extend(self._wrap_chars_ls(draw, cur, font, max_w, ls))
+                    else:
+                        lines.append(cur)
                     cur = w
             if self._text_w_ls(draw, cur, font, ls) > max_w:
                 lines.extend(self._wrap_chars_ls(draw, cur, font, max_w, ls))

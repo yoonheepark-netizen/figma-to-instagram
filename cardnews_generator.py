@@ -1670,7 +1670,7 @@ def _build_script_system(num_content: int = 5) -> str:
     image_prompt_lines = []
     for i in range(1, num_content + 1):
         content_json_lines.append(
-            f'  "content{i}": {{"heading": "카드 대형 텍스트 15~30자 (마크다운 금지)", "body": "부연 설명 한 줄 20~40자"}}'
+            f'  "content{i}": "카드 한 장에 담을 줄글 문장 30~60자 (마크다운 금지, 해요체)"'
         )
         image_prompt_lines.append(
             f'    "content{i}": "keyword1 keyword2 warm soft light. No text, no letters, no numbers, no typography, no watermark, no logo."'
@@ -1690,12 +1690,12 @@ def _build_script_system(num_content: int = 5) -> str:
 ## 핵심 디자인 규칙 (반드시 준수!)
 - 1장 1메시지: 각 카드는 반드시 하나의 핵심 메시지만 전달합니다
 - 내용 중복 절대 금지: 같은 해결책/조언/팁을 2번 이상 언급하지 마세요
-- 각 content는 heading + body 구조: heading은 카드의 대형 텍스트(15~30자), body는 짧은 부연(1줄, 20~40자)
-- body는 최대 1줄: 리스트/나열 금지. 짧은 부연만.
+- 각 content는 줄글 한 문장(30~60자): 자연스럽게 읽히는 문장형 텍스트로 작성
+- 리스트/나열 금지. 카드마다 하나의 완결된 문장.
 - 반드시 한국어만 사용: 영어, 일본어, 베트남어 등 다른 언어 절대 금지!
 - 마크다운 기호(**, ~~, *, __, ` 등) 절대 사용 금지! 순수 텍스트만 작성하세요.
 - 해요체 필수. 이모지 사용 금지.
-- 각 카드의 heading은 독립적으로 읽혀도 의미가 전달되어야 합니다
+- 각 카드의 문장은 독립적으로 읽혀도 의미가 전달되어야 합니다
 
 ## 신뢰도 원칙 (건강 콘텐츠이므로 필수!)
 - sources 필드에 본문에서 인용한 모든 사실/수치의 **구체적 출처**를 기입
@@ -1893,7 +1893,7 @@ def generate_description_first(idea: dict, num_content: int = 5) -> dict | None:
     Returns: {
       "description": "인스타그램 캡션 전문",
       "cover": "표지 헤드라인",
-      "content1": {"heading": "...", "body": "..."},
+      "content1": "줄글 한 문장 30~60자",
       ...
       "hashtags": [...],
       "sources": [...],
@@ -1926,8 +1926,7 @@ def generate_description_first(idea: dict, num_content: int = 5) -> dict | None:
 - 캡션의 핵심 메시지를 카드별로 나누세요. 캡션의 흐름과 맥락을 유지하세요.
 - 1장 1메시지: 각 카드는 하나의 핵심 포인트만 전달
 - 내용 중복 절대 금지
-- heading: 카드의 대형 텍스트 (15~30자, 짧고 임팩트 있게)
-- body: 부연 설명 한 줄 (20~40자, 없어도 됨)
+- 각 content는 줄글 한 문장(30~60자): 자연스럽게 읽히는 문장형 텍스트
 - 해요체 필수. 이모지 사용 금지.
 - 한국어만 사용 (영어, 한자 금지)
 - 마크다운 기호(**, ~~, *, __ 등) 절대 사용 금지. 순수 텍스트만.
@@ -1949,10 +1948,10 @@ def generate_description_first(idea: dict, num_content: int = 5) -> dict | None:
 ```json
 {{
   "cover": "표지 헤드라인 15~30자",
-  "content1": {{"heading": "카드 제목", "body": "부연 한 줄"}},
-  "content2": {{"heading": "카드 제목", "body": "부연 한 줄"}},
+  "content1": "줄글 한 문장 30~60자",
+  "content2": "줄글 한 문장 30~60자",
   ...
-  "content{num_content}": {{"heading": "카드 제목", "body": "부연 한 줄"}},
+  "content{num_content}": "줄글 한 문장 30~60자",
   "hashtags": ["#수한의원", "#thesoo", "#한의사", "#건강정보", "#주제태그"],
   "sources": ["출처1", "출처2"],
   "image_prompts": {{
@@ -2319,7 +2318,7 @@ def _split_heading_body(text):
     """스크립트 텍스트를 heading + body로 분리.
 
     text가 dict이면 heading/body 키를 직접 사용.
-    str이면 첫 줄(또는 첫 문장)을 heading, 나머지를 body로 분리.
+    str이면 줄글 스타일: 전체 텍스트를 heading으로, body는 빈 문자열.
     반환 전 마크다운 기호를 자동 제거.
     """
     if isinstance(text, dict):
@@ -2327,19 +2326,8 @@ def _split_heading_body(text):
         b = _clean_markdown(text.get("body", ""))
         return h, b
 
+    # 줄글 스타일: 전체를 heading으로 반환 (분리하지 않음)
     text = _clean_markdown(str(text).strip())
-    # 줄바꿈 기준 분리
-    lines = text.split("\n")
-    if len(lines) >= 2:
-        return lines[0].strip(), "\n".join(lines[1:]).strip()
-
-    # 마침표/물음표 기준 첫 문장 분리
-    for sep in [".", "?", "!"]:
-        idx = text.find(sep)
-        if 0 < idx < len(text) - 1:
-            return text[:idx + 1].strip(), text[idx + 1:].strip()
-
-    # 분리 불가 시 전체를 heading으로
     return text, ""
 
 
@@ -2396,13 +2384,14 @@ def generate_all_card_images(
                 # content 슬라이드: render_content() 사용
                 content_num += 1
                 heading, body = _split_heading_body(text)
-                if not body:
-                    body = "- " + heading
-                    heading = f"#{content_num}"
+                # 제품 키워드(공진단/경옥고) 감지 시 Unsplash 대신 제품 이미지 사용
+                content_text = str(text) if isinstance(text, str) else f"{text.get('heading', '')} {text.get('body', '')}"
+                _PRODUCT_KW = ("경옥고", "공진단")
+                use_product_bg = any(kw in content_text for kw in _PRODUCT_KW)
                 image_bytes = renderer.render_content(
                     heading=heading, body=body,
                     slide_num=content_num, total_slides=content_total,
-                    bg_image=bg_bytes,
+                    bg_image=None if use_product_bg else bg_bytes,
                 )
         except Exception as e:
             logger.warning(f"카드 이미지 생성 실패 ({key}): {e}")

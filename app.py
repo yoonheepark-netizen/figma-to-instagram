@@ -393,8 +393,8 @@ def render_cardnews_page():
 
     suggestions = suggest_topics(include_news=True)
     if suggestions:
-        # 2행 x 4열 카드 레이아웃 (최대 8개 표시)
-        display = suggestions[:8]
+        # 3행 x 4열 카드 레이아웃 (최대 12개 표시)
+        display = suggestions[:12]
         num_cols = 4
         for row_start in range(0, len(display), num_cols):
             row_items = display[row_start:row_start + num_cols]
@@ -419,8 +419,9 @@ def render_cardnews_page():
                             f"{score}점</span></div>",
                             unsafe_allow_html=True,
                         )
-                        # 제목
-                        topic_display = sug["topic"][:28] + ("..." if len(sug["topic"]) > 28 else "")
+                        # 제목 (마크다운 기호 제거)
+                        clean_topic = sug["topic"].replace("**", "").replace("*", "").replace("__", "")
+                        topic_display = clean_topic[:28] + ("..." if len(clean_topic) > 28 else "")
                         st.markdown(f"**{topic_display}**")
                         # 추천 사유
                         reason = sug.get("reason", "")

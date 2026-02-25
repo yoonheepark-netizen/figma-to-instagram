@@ -539,7 +539,9 @@ def _convert_trends_to_health(keywords: list[str]) -> dict[str, str]:
             if match:
                 result = json.loads(match.group(0))
                 for kw, topic in result.items():
-                    _trend_convert_cache[kw] = topic
+                    # LLM 출력에서 마크다운 기호 제거
+                    clean = topic.replace("**", "").replace("*", "").replace("__", "").strip()
+                    _trend_convert_cache[kw] = clean
         except (json.JSONDecodeError, AttributeError):
             logger.warning("트렌드→건강 주제 변환 파싱 실패")
 

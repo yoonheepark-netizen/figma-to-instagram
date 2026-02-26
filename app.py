@@ -948,54 +948,66 @@ def render_reels_page():
             progress_bar.progress(min(pct, 0.99), text=msg)
             status_text.caption(msg)
 
-        # Phase 1: GIF/영상 미디어 검색 + 다운로드
-        _progress(0.0, "GIF/영상 미디어 검색 중...")
-        media_data = []  # [(bytes, metadata), ...]
-        for i, slide in enumerate(slides):
-            query = slide.get("media_query", "") or slide.get("image_prompt", "")
-            media_type = slide.get("media_type", "gif")
+        try:
+            # Phase 1: GIF/영상 미디어 검색 + 다운로드
+            _progress(0.0, "GIF/영상 미디어 검색 중...")
+            media_data = []  # [(bytes, metadata), ...]
+            for i, slide in enumerate(slides):
+                query = slide.get("media_query", "") or slide.get("image_prompt", "")
+                media_type = slide.get("media_type", "gif")
 
-            if not query or slide.get("type") == "closing":
-                media_data.append((None, None))
-            else:
-                m_bytes, m_info = search_and_download(query, preferred_type=media_type)
-                if m_bytes and m_info:
-                    media_data.append((m_bytes, m_info))
-                    _progress(0.02 + (i / len(slides)) * 0.13,
-                              f"미디어 {i + 1}/{len(slides)}: {m_info['type']}/{m_info.get('source', '?')}")
-                else:
+                if not query or slide.get("type") == "closing":
                     media_data.append((None, None))
-                    _progress(0.02 + (i / len(slides)) * 0.13,
-                              f"미디어 {i + 1}/{len(slides)}: 폴백 (단색 배경)")
+                else:
+                    m_bytes, m_info = search_and_download(query, preferred_type=media_type)
+                    if m_bytes and m_info:
+                        media_data.append((m_bytes, m_info))
+                        _progress(0.02 + (i / len(slides)) * 0.13,
+                                  f"미디어 {i + 1}/{len(slides)}: {m_info['type']}/{m_info.get('source', '?')}")
+                    else:
+                        media_data.append((None, None))
+                        _progress(0.02 + (i / len(slides)) * 0.13,
+                                  f"미디어 {i + 1}/{len(slides)}: 폴백 (단색 배경)")
 
-        st.session_state.rl_media = media_data
+            st.session_state.rl_media = media_data
 
-        # Phase 2: 텍스트 오버레이 렌더링
-        _progress(0.15, "텍스트 오버레이 렌더링 중...")
-        renderer = ReelsRenderer()
-        overlay_images = renderer.render_overlays(slides)
-        st.session_state.rl_frames = overlay_images
-        _progress(0.20, f"오버레이 {len(overlay_images)}장 렌더링 완료")
+            # Phase 2: 텍스트 오버레이 렌더링
+            _progress(0.15, "텍스트 오버레이 렌더링 중...")
+            renderer = ReelsRenderer()
+            overlay_images = renderer.render_overlays(slides)
+            st.session_state.rl_frames = overlay_images
+            _progress(0.20, f"오버레이 {len(overlay_images)}장 렌더링 완료")
 
-        # Phase 3: 나레이션 + 영상 합성
-        import tempfile
-        output_dir = tempfile.mkdtemp(prefix="reel_")
+            # Phase 3: 나레이션 + 영상 합성
+            import tempfile
+            output_dir = tempfile.mkdtemp(prefix="reel_")
 
-        result = create_reel(
-            slides=slides,
-            media_data=media_data,
-            overlay_images=overlay_images,
-            output_dir=output_dir,
-            voice=voice_id,
-            include_intro=inc_intro,
-            include_bumper=inc_bumper,
-            progress_callback=lambda pct, msg: _progress(0.20 + pct * 0.75, msg),
-        )
-        st.session_state.rl_result = result
+            result = create_reel(
+                slides=slides,
+                media_data=media_data,
+                overlay_images=overlay_images,
+                output_dir=output_dir,
+                voice=voice_id,
+                include_intro=inc_intro,
+                include_bumper=inc_bumper,
+                progress_callback=lambda pct, msg: _progress(0.20 + pct * 0.75, msg),
+            )
+            st.session_state.rl_result = result
 
-        progress_bar.progress(1.0, text="릴스 영상 생성 완료!")
-        status_text.empty()
-        st.rerun()
+            progress_bar.progress(1.0, text="릴스 영상 생성 완료!")
+            status_text.empty()
+            st.rerun()
+
+        except MemoryError:
+            progress_bar.empty()
+            status_text.empty()
+            st.error("메모리 부족으로 영상 생성에 실패했습니다. 슬라이드 수를 줄이거나 범퍼를 비활성화해 보세요.")
+        except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"영상 생성 실패: {e}")
+            import traceback
+            st.code(traceback.format_exc(), language="text")
 
     # ── Step 4: 결과 ──
     result = st.session_state.rl_result

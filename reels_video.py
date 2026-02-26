@@ -284,9 +284,9 @@ def _load_video_clip(media_bytes: bytes, media_info: dict, duration: float):
     _track_temp(tmp.name)
 
     clip = VideoFileClip(tmp.name)
-    # 루핑
+    # 루핑 (최대 3회 — 메모리 절약)
     if clip.duration < duration:
-        n_loops = int(duration / clip.duration) + 1
+        n_loops = min(int(duration / clip.duration) + 1, 3)
         clip = concatenate_videoclips([clip] * n_loops).subclipped(0, duration)
     else:
         clip = clip.subclipped(0, min(clip.duration, duration))
@@ -471,68 +471,30 @@ def compose_reel(
     else:
         current_step += 1
 
-    # 클립 연결 (스와이프)
+    # 클립 연결 (단순 연결 — 메모리 절약)
     if len(composed_slides) == 0:
         raise ValueError("합성할 슬라이드가 없습니다.")
 
     if len(composed_slides) == 1:
         final_video = composed_slides[0]
     else:
-        segments = []
-        for i, clip in enumerate(composed_slides):
-            if i == 0:
-                segments.append(clip)
-            else:
-                prev = composed_slides[i - 1]
-                trans = _swipe_transition(prev, clip, TRANSITION_DUR)
-                segments.append(trans)
-                remaining_dur = clip.duration - TRANSITION_DUR
-                if remaining_dur > 0:
-                    remaining = clip.subclipped(TRANSITION_DUR)
-                    segments.append(remaining)
-        final_video = concatenate_videoclips(segments, method="compose")
+        final_video = concatenate_videoclips(composed_slides, method="chain")
 
-    # 오디오 합성 (나레이션 + SFX)
-    all_audio_parts = []
-
-    # 나레이션 오디오
+    # 오디오 합성 (나레이션만 — SFX 생략으로 메모리 절약)
     if slide_audios:
-        all_audio_parts.extend(
-            [audio.with_start(start) for audio, start in slide_audios]
-        )
-
-    # SFX: 전환 시점에 whoosh, 각 씬 시작에 pop
-    sfx_times = []
-    t = 0.0
-    for i, clip in enumerate(composed_slides):
-        if i > 0:
-            sfx_times.append(("whoosh", t - TRANSITION_DUR / 2))
-        sfx_times.append(("pop", t + 0.1))
-        t += clip.duration
-    for sfx_type, sfx_time in sfx_times:
-        sfx_path = generate_sfx(sfx_type)
-        if sfx_path and os.path.exists(sfx_path):
-            try:
-                sfx_clip = AudioFileClip(sfx_path)
-                sfx_clip = sfx_clip.with_start(max(0, sfx_time))
-                all_audio_parts.append(sfx_clip)
-                _track_temp(sfx_path)
-            except Exception as e:
-                logger.debug(f"SFX 로드 실패: {e}")
-
-    if all_audio_parts:
+        all_audio_parts = [audio.with_start(start) for audio, start in slide_audios]
         combined_audio = CompositeAudioClip(all_audio_parts)
         if final_video.audio is not None:
             combined_audio = CompositeAudioClip([final_video.audio, combined_audio])
         final_video = final_video.with_audio(combined_audio)
 
-    # 내보내기
+    # 내보내기 (메모리 절약: threads=1, ultrafast)
     current_step = total_steps
     _progress(current_step, total_steps, "MP4 내보내기 중...")
 
     final_video.write_videofile(
         output_path, fps=FPS, codec="libx264", audio_codec="aac",
-        threads=4, preset="medium", logger=None,
+        threads=1, preset="ultrafast", logger=None,
     )
 
     # 정리
@@ -547,6 +509,10 @@ def compose_reel(
             audio.close()
         except Exception:
             pass
+
+    # 메모리 해제
+    import gc
+    gc.collect()
 
     # GIF/영상 temp 파일 정리 (렌더링 완료 후에만!)
     _cleanup_temp_files()

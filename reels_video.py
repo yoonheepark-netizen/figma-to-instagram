@@ -37,21 +37,73 @@ FPS = 30
 TRANSITION_DUR = 0.4
 SLIDE_PADDING = 0.5
 
+# ── temp 파일 추적 (MoviePy 렌더링 완료 후 정리) ────────
+_temp_files: list[str] = []
+
+
+def _track_temp(path: str) -> str:
+    """temp 파일 경로를 추적 리스트에 추가."""
+    _temp_files.append(path)
+    return path
+
+
+def _cleanup_temp_files():
+    """추적된 temp 파일 일괄 정리."""
+    for path in _temp_files:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+    _temp_files.clear()
+
 # ── 음성 프리셋 ──────────────────────────────────────────
 VOICES = {
     "여성 (선히)": "ko-KR-SunHiNeural",
+    "남성 (현수)": "ko-KR-HyunsuMultilingualNeural",
     "남성 (인준)": "ko-KR-InJoonNeural",
 }
-DEFAULT_VOICE = "ko-KR-SunHiNeural"
+DEFAULT_VOICE = "ko-KR-HyunsuMultilingualNeural"
+
+# 음성별 최적 rate/pitch 설정 (자연스러운 말투)
+_VOICE_PRESETS = {
+    "ko-KR-SunHiNeural": {"rate": "-8%", "pitch": "+5Hz"},
+    "ko-KR-HyunsuMultilingualNeural": {"rate": "-5%", "pitch": "+0Hz"},
+    "ko-KR-InJoonNeural": {"rate": "-5%", "pitch": "+0Hz"},
+}
 
 
 # ═════════════════════════════════════════════════════════
 # 나레이션 생성 (edge-tts)
 # ═════════════════════════════════════════════════════════
 
+def _preprocess_narration(text: str) -> str:
+    """나레이션 텍스트 전처리 — 자연스러운 TTS를 위한 보정.
+
+    - 이모지 제거 (TTS가 읽으면 어색)
+    - ㅋㅋ 등 웃음 표현 제거
+    - 마침표 뒤 쉼표 추가 (자연스러운 호흡)
+    """
+    import re
+    # 이모지 제거
+    text = re.sub(r'[\U0001F600-\U0001F9FF\U00002702-\U000027B0'
+                  r'\U0001F1E0-\U0001F1FF\U00002600-\U000026FF'
+                  r'\U0000FE00-\U0000FE0F\U0001FA00-\U0001FAFF]+', '', text)
+    # ㅋㅋ, ㄷㄷ 등 제거
+    text = re.sub(r'[ㅋㅎㄷㅠㅜ]{2,}', '', text)
+    # 연속 공백 정리
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 async def _generate_narration_async(text: str, output_path: str,
                                      voice: str = DEFAULT_VOICE) -> str:
-    communicate = edge_tts.Communicate(text, voice)
+    text = _preprocess_narration(text)
+    preset = _VOICE_PRESETS.get(voice, {})
+    communicate = edge_tts.Communicate(
+        text, voice,
+        rate=preset.get("rate", "-5%"),
+        pitch=preset.get("pitch", "+0Hz"),
+    )
     await communicate.save(output_path)
     return output_path
 
@@ -112,7 +164,7 @@ def get_audio_duration(audio_path: str) -> float:
 # 클립 유틸
 # ═════════════════════════════════════════════════════════
 
-def _fit_clip_to_reel(clip) -> VideoFileClip:
+def _fit_clip_to_reel(clip):
     """영상/이미지 클립을 1080×1920에 맞게 리사이즈+크롭."""
     cw, ch = clip.size
     target_ratio = W / H
@@ -132,6 +184,39 @@ def _fit_clip_to_reel(clip) -> VideoFileClip:
         x2=x_center + W / 2, y2=y_center + H / 2,
     )
     return cropped
+
+
+def _letterbox_landscape(clip, bg_color=(43, 91, 224)):
+    """가로 영상을 세로 프레임 안에 레터박스로 배치 (원본 비율 유지).
+
+    가로 1920×1080 → 세로 1080×1920 안에서:
+      - 영상을 가로폭 1080에 맞게 축소 (1080×607)
+      - 상하 브랜드 블루 배경으로 패딩
+    """
+    cw, ch = clip.size
+
+    # 가로폭 = W에 맞추고, 세로는 비율 유지
+    scale = W / cw
+    new_w = W
+    new_h = int(ch * scale)
+    resized = clip.resized((new_w, new_h))
+
+    # 브랜드 블루 배경
+    bg_arr = np.full((H, W, 3), bg_color, dtype=np.uint8)
+    bg_clip = ImageClip(bg_arr).with_duration(clip.duration)
+
+    # 세로 중앙 배치
+    y_offset = (H - new_h) // 2
+    final = CompositeVideoClip(
+        [bg_clip, resized.with_position(("center", y_offset))],
+        size=(W, H),
+    ).with_duration(clip.duration)
+
+    # 원본 오디오 유지
+    if clip.audio is not None:
+        final = final.with_audio(clip.audio)
+
+    return final
 
 
 def _image_bytes_to_clip(img_bytes: bytes, duration: float) -> ImageClip:
@@ -176,14 +261,18 @@ def _media_to_bg_clip(media_bytes: bytes, media_info: dict, duration: float):
 
 
 def _gif_bytes_to_bg(gif_bytes: bytes, media_info: dict, duration: float):
-    """GIF(mp4) → 루핑 배경 클립 (1080×1920)."""
+    """GIF(mp4) → 루핑 배경 클립 (1080×1920).
+
+    주의: temp 파일은 MoviePy 렌더링이 끝날 때까지 유지해야 함!
+    (VideoFileClip은 프레임을 lazy하게 읽으므로 파일 삭제 시 정적 이미지가 됨)
+    """
     is_mp4 = media_info.get("mp4_url", "").endswith(".mp4") or b"ftyp" in gif_bytes[:20]
     suffix = ".mp4" if is_mp4 else ".gif"
 
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     tmp.write(gif_bytes)
     tmp.close()
-    tmp_path = tmp.name
+    tmp_path = _track_temp(tmp.name)  # 렌더링 후 정리
 
     try:
         clip = VideoFileClip(tmp_path)
@@ -200,11 +289,6 @@ def _gif_bytes_to_bg(gif_bytes: bytes, media_info: dict, duration: float):
     except Exception as e:
         logger.warning(f"GIF 클립 변환 실패: {e}")
         return _solid_color_clip(duration)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
 
 
 def _video_bytes_to_bg(video_bytes: bytes, duration: float):
@@ -212,7 +296,7 @@ def _video_bytes_to_bg(video_bytes: bytes, duration: float):
     tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp.write(video_bytes)
     tmp.close()
-    tmp_path = tmp.name
+    tmp_path = _track_temp(tmp.name)  # 렌더링 후 정리
 
     try:
         clip = VideoFileClip(tmp_path)
@@ -226,11 +310,6 @@ def _video_bytes_to_bg(video_bytes: bytes, duration: float):
     except Exception as e:
         logger.warning(f"영상 클립 변환 실패: {e}")
         return _solid_color_clip(duration)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
 
 
 def _image_bytes_to_ken_burns(img_bytes: bytes, duration: float):
@@ -337,7 +416,13 @@ def compose_reel(
         current_step += 1
         _progress(current_step, total_steps, "인트로 영상 로드 중...")
         intro_clip = VideoFileClip(INTRO_PATH)
-        intro_clip = _fit_clip_to_reel(intro_clip)
+        iw, ih = intro_clip.size
+        if iw > ih:
+            # 가로 영상 → 레터박스 (원본 애니메이션 보존)
+            intro_clip = _letterbox_landscape(intro_clip)
+            logger.info(f"INTRO 레터박스 처리: {iw}×{ih} → {W}×{H}")
+        elif (iw, ih) != (W, H):
+            intro_clip = _fit_clip_to_reel(intro_clip)
         composed_slides.append(intro_clip)
         cumulative_time += intro_clip.duration
     else:
@@ -382,8 +467,12 @@ def compose_reel(
         current_step += 1
         _progress(current_step, total_steps, "범퍼 영상 로드 중...")
         bumper_clip = VideoFileClip(BUMPER_PATH)
-        if bumper_clip.size != [W, H]:
-            bumper_clip = _fit_clip_to_reel(bumper_clip)
+        bw, bh = bumper_clip.size
+        if (bw, bh) != (W, H):
+            if bw > bh:
+                bumper_clip = _letterbox_landscape(bumper_clip)
+            else:
+                bumper_clip = _fit_clip_to_reel(bumper_clip)
         composed_slides.append(bumper_clip)
     else:
         current_step += 1
@@ -438,6 +527,9 @@ def compose_reel(
             audio.close()
         except Exception:
             pass
+
+    # GIF/영상 temp 파일 정리 (렌더링 완료 후에만!)
+    _cleanup_temp_files()
 
     logger.info(f"릴스 영상 생성 완료: {output_path}")
     return output_path

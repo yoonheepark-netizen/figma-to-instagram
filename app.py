@@ -39,11 +39,27 @@ from figma_client import FigmaClient
 from image_host import ImageHost
 from instagram_client import InstagramClient
 from pencil_client import PencilClient
-from media_source import search_and_download, search_media, download_media, get_available_sources, check_api_status
-from reels_renderer import ReelsRenderer
-from reels_script_generator import generate_reels_script
-from reels_video import create_reel, VOICES, DEFAULT_VOICE
 from token_manager import TokenManager
+
+# ── 릴스 관련 lazy import (무거운 moviepy/edge_tts는 필요 시에만 로드) ──
+def _lazy_reels_imports():
+    """릴스 페이지 진입 시에만 호출 — 무거운 모듈 lazy 로드."""
+    from media_source import search_and_download, search_media, download_media, get_available_sources, check_api_status
+    from reels_renderer import ReelsRenderer
+    from reels_script_generator import generate_reels_script
+    from reels_video import create_reel, VOICES, DEFAULT_VOICE
+    return {
+        "search_and_download": search_and_download,
+        "search_media": search_media,
+        "download_media": download_media,
+        "get_available_sources": get_available_sources,
+        "check_api_status": check_api_status,
+        "ReelsRenderer": ReelsRenderer,
+        "generate_reels_script": generate_reels_script,
+        "create_reel": create_reel,
+        "VOICES": VOICES,
+        "DEFAULT_VOICE": DEFAULT_VOICE,
+    }
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
 
@@ -804,6 +820,21 @@ def render_cardnews_page():
 
 def render_reels_page():
     """🎬 릴스 생성 페이지 — GIF/영상 배경 + 유머 스크립트."""
+    # Lazy import (moviepy, edge-tts 등 무거운 모듈)
+    try:
+        rl = _lazy_reels_imports()
+    except Exception as e:
+        st.error(f"릴스 모듈 로드 실패: {e}")
+        st.caption("moviepy, edge-tts 등 의존성이 설치되지 않았을 수 있습니다.")
+        return
+
+    get_available_sources = rl["get_available_sources"]
+    search_and_download = rl["search_and_download"]
+    ReelsRenderer = rl["ReelsRenderer"]
+    generate_reels_script = rl["generate_reels_script"]
+    create_reel = rl["create_reel"]
+    VOICES = rl["VOICES"]
+
     st.markdown("##### 🎬 릴스 생성 — 1분건강톡")
     st.caption("주제 → AI 스크립트(유머+밈) → GIF/영상 배경 → 나레이션 → 영상 합성")
 

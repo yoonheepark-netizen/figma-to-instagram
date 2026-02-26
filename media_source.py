@@ -21,11 +21,27 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+
+def _get_key(env_name: str) -> str:
+    """환경변수 → Streamlit secrets 순으로 API 키 조회."""
+    val = os.getenv(env_name, "")
+    if val:
+        return val
+    # Streamlit Cloud secrets 폴백
+    try:
+        import streamlit as st
+        if "api" in st.secrets and env_name in st.secrets["api"]:
+            return str(st.secrets["api"][env_name])
+    except Exception:
+        pass
+    return ""
+
+
 # ── API 키 ───────────────────────────────────────────────
-_TENOR_KEY = os.getenv("GEMINI_API_KEY", "")  # Google API 키 = Tenor API 키
-_GIPHY_KEY = os.getenv("GIPHY_API_KEY", "")  # developers.giphy.com에서 무료 발급
-_PEXELS_KEY = os.getenv("PEXELS_API_KEY", "")
-_UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
+_TENOR_KEY = _get_key("GEMINI_API_KEY")        # Google API 키 = Tenor API 키
+_GIPHY_KEY = _get_key("GIPHY_API_KEY")         # developers.giphy.com에서 무료 발급
+_PEXELS_KEY = _get_key("PEXELS_API_KEY")
+_UNSPLASH_KEY = _get_key("UNSPLASH_ACCESS_KEY")
 
 MediaType = Literal["gif", "video", "image"]
 

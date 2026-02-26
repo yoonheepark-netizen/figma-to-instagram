@@ -25,8 +25,6 @@ from moviepy import (
 )
 from PIL import Image
 
-from sfx import generate_sfx
-
 logger = logging.getLogger(__name__)
 
 # ── 경로 ─────────────────────────────────────────────────
@@ -389,6 +387,55 @@ def _swipe_transition(clip1, clip2, trans_dur: float = TRANSITION_DUR):
 # 메인 합성 (GIF/영상 배경 + 텍스트 오버레이)
 # ═════════════════════════════════════════════════════════
 
+def _render_one_scene(scene_clip, narr_path: str, output_file: str,
+                       fade_dur: float = 0.3):
+    """씬 하나를 개별 MP4로 렌더링 (메모리 최소화).
+
+    한 번에 한 씬만 메모리에 올리고 바로 디스크에 기록.
+    """
+    import gc
+    narr_dur = get_audio_duration(narr_path)
+    slide_dur = narr_dur + SLIDE_PADDING
+
+    # duration 조정
+    if hasattr(scene_clip, 'duration') and scene_clip.duration and scene_clip.duration >= slide_dur:
+        clip = scene_clip.subclipped(0, slide_dur)
+    else:
+        clip = scene_clip.with_duration(slide_dur)
+
+    # 페이드 인/아웃 (부드러운 전환 효과)
+    if slide_dur > fade_dur * 2:
+        from moviepy.video.fx import FadeIn, FadeOut
+        clip = clip.with_effects([FadeIn(fade_dur), FadeOut(fade_dur)])
+
+    # 나레이션 오디오 합성
+    if narr_path and os.path.exists(narr_path):
+        audio = AudioFileClip(narr_path)
+        clip = clip.with_audio(audio)
+
+    # SFX: 씬 시작에 whoosh
+    try:
+        from sfx import generate_sfx
+        sfx_path = generate_sfx("whoosh")
+        if sfx_path and os.path.exists(sfx_path):
+            sfx_clip = AudioFileClip(sfx_path)
+            if clip.audio is not None:
+                clip = clip.with_audio(
+                    CompositeAudioClip([clip.audio, sfx_clip.with_start(0.0)])
+                )
+            _track_temp(sfx_path)
+    except Exception:
+        pass
+
+    # 개별 MP4로 저장
+    clip.write_videofile(
+        output_file, fps=FPS, codec="libx264", audio_codec="aac",
+        threads=2, preset="fast", logger=None,
+    )
+    clip.close()
+    gc.collect()
+
+
 def compose_reel(
     scene_clips: list,
     narration_paths: list[str],
@@ -397,69 +444,64 @@ def compose_reel(
     include_bumper: bool = True,
     progress_callback=None,
 ) -> str:
-    """릴스 영상 합성.
+    """릴스 영상 합성 — 씬별 개별 렌더링 + ffmpeg 연결.
 
-    Args:
-        scene_clips: 완성된 씬 클립 리스트 (GIF+블루바+텍스트 합성 완료)
-        narration_paths: 나레이션 MP3 경로 리스트
-        output_path: 출력 MP4 경로
-        include_intro: 인트로 포함 여부 (기본: False — 본론부터 시작)
+    메모리 최적화: 한 번에 한 씬만 메모리에 로드.
+    품질: preset=fast, 페이드 전환, SFX 포함.
     """
+    import gc
+    import subprocess
 
     def _progress(step, total, msg):
         if progress_callback:
             progress_callback(step, total, msg)
         logger.info(f"[{step}/{total}] {msg}")
 
+    output_dir = os.path.dirname(output_path)
+    segment_files = []
     total_steps = len(scene_clips) + 3
     current_step = 0
 
-    composed_slides = []
-    slide_audios = []
-    cumulative_time = 0.0
-
-    # INTRO (기본 비활성 — 본론부터 시작)
+    # INTRO
     if include_intro and os.path.exists(INTRO_PATH):
         current_step += 1
-        _progress(current_step, total_steps, "인트로 영상 로드 중...")
+        _progress(current_step, total_steps, "인트로 영상 준비 중...")
+        intro_out = os.path.join(output_dir, "seg_intro.mp4")
         intro_clip = VideoFileClip(INTRO_PATH)
         iw, ih = intro_clip.size
         if iw > ih:
             intro_clip = _letterbox_landscape(intro_clip)
         elif (iw, ih) != (W, H):
             intro_clip = _fit_clip_to_reel(intro_clip)
-        composed_slides.append(intro_clip)
-        cumulative_time += intro_clip.duration
+        intro_clip.write_videofile(
+            intro_out, fps=FPS, codec="libx264", audio_codec="aac",
+            threads=2, preset="fast", logger=None,
+        )
+        intro_clip.close()
+        gc.collect()
+        segment_files.append(intro_out)
     else:
         current_step += 1
 
-    # 씬 클립 배치 + 나레이션 동기화
+    # 각 씬을 개별 MP4로 렌더링 (핵심: 한 번에 하나만!)
     for i, scene_clip in enumerate(scene_clips):
         current_step += 1
-        _progress(current_step, total_steps, f"씬 {i + 1}/{len(scene_clips)} 배치 중...")
+        _progress(current_step, total_steps, f"씬 {i + 1}/{len(scene_clips)} 렌더링 중...")
 
         narr_path = narration_paths[i] if i < len(narration_paths) else ""
-        narr_dur = get_audio_duration(narr_path)
-        slide_dur = narr_dur + SLIDE_PADDING
+        seg_file = os.path.join(output_dir, f"seg_{i:02d}.mp4")
 
-        # 씬 duration 조정
-        if hasattr(scene_clip, 'duration') and scene_clip.duration and scene_clip.duration >= slide_dur:
-            final_scene = scene_clip.subclipped(0, slide_dur)
-        else:
-            final_scene = scene_clip.with_duration(slide_dur)
-
-        composed_slides.append(final_scene)
-
-        if narr_path and os.path.exists(narr_path):
-            audio = AudioFileClip(narr_path)
-            slide_audios.append((audio, cumulative_time))
-
-        cumulative_time += slide_dur
+        try:
+            _render_one_scene(scene_clip, narr_path, seg_file)
+            segment_files.append(seg_file)
+        except Exception as e:
+            logger.warning(f"씬 {i} 렌더링 실패: {e}")
 
     # BUMPER
     if include_bumper and os.path.exists(BUMPER_PATH):
         current_step += 1
-        _progress(current_step, total_steps, "범퍼 영상 로드 중...")
+        _progress(current_step, total_steps, "범퍼 영상 준비 중...")
+        bumper_out = os.path.join(output_dir, "seg_bumper.mp4")
         bumper_clip = VideoFileClip(BUMPER_PATH)
         bw, bh = bumper_clip.size
         if (bw, bh) != (W, H):
@@ -467,54 +509,50 @@ def compose_reel(
                 bumper_clip = _letterbox_landscape(bumper_clip)
             else:
                 bumper_clip = _fit_clip_to_reel(bumper_clip)
-        composed_slides.append(bumper_clip)
+        bumper_clip.write_videofile(
+            bumper_out, fps=FPS, codec="libx264", audio_codec="aac",
+            threads=2, preset="fast", logger=None,
+        )
+        bumper_clip.close()
+        gc.collect()
+        segment_files.append(bumper_out)
     else:
         current_step += 1
 
-    # 클립 연결 (단순 연결 — 메모리 절약)
-    if len(composed_slides) == 0:
+    if not segment_files:
         raise ValueError("합성할 슬라이드가 없습니다.")
 
-    if len(composed_slides) == 1:
-        final_video = composed_slides[0]
-    else:
-        final_video = concatenate_videoclips(composed_slides, method="chain")
+    # ffmpeg concat으로 연결 (메모리 거의 안 씀!)
+    _progress(total_steps, total_steps, "MP4 최종 연결 중...")
+    concat_list = os.path.join(output_dir, "concat.txt")
+    with open(concat_list, "w") as f:
+        for sf in segment_files:
+            f.write(f"file '{sf}'\n")
 
-    # 오디오 합성 (나레이션만 — SFX 생략으로 메모리 절약)
-    if slide_audios:
-        all_audio_parts = [audio.with_start(start) for audio, start in slide_audios]
-        combined_audio = CompositeAudioClip(all_audio_parts)
-        if final_video.audio is not None:
-            combined_audio = CompositeAudioClip([final_video.audio, combined_audio])
-        final_video = final_video.with_audio(combined_audio)
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", concat_list, "-c", "copy", output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"ffmpeg concat 실패: {result.stderr[:500]}")
+        # 폴백: 첫 번째 세그먼트라도 반환
+        if segment_files:
+            import shutil
+            shutil.copy2(segment_files[0], output_path)
 
-    # 내보내기 (메모리 절약: threads=1, ultrafast)
-    current_step = total_steps
-    _progress(current_step, total_steps, "MP4 내보내기 중...")
-
-    final_video.write_videofile(
-        output_path, fps=FPS, codec="libx264", audio_codec="aac",
-        threads=1, preset="ultrafast", logger=None,
-    )
-
-    # 정리
-    final_video.close()
-    for clip in composed_slides:
+    # 세그먼트 파일 정리
+    for sf in segment_files:
         try:
-            clip.close()
+            os.unlink(sf)
         except Exception:
             pass
-    for audio, _ in slide_audios:
-        try:
-            audio.close()
-        except Exception:
-            pass
+    try:
+        os.unlink(concat_list)
+    except Exception:
+        pass
 
-    # 메모리 해제
-    import gc
-    gc.collect()
-
-    # GIF/영상 temp 파일 정리 (렌더링 완료 후에만!)
+    # GIF/영상 temp 파일 정리
     _cleanup_temp_files()
 
     logger.info(f"릴스 영상 생성 완료: {output_path}")

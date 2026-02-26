@@ -1,7 +1,8 @@
 """릴스 영상 합성 모듈 — 1분건강톡.
 
-GIF/영상/이미지 배경 + 텍스트 오버레이 + edge-tts 나레이션.
-INTRO.mp4 → 슬라이드(스와이프 전환) → BUMPER.mov
+참고 영상 스타일: 상단 55% GIF/이미지 + 하단 45% 브랜드 블루 텍스트.
+GIF는 꽉 채우지 않고 상단 영역에 배치. 오프닝 없이 본론부터 시작.
+나레이션(edge-tts) 기반 동적 씬 구성 → BUMPER.mov 연결.
 """
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ from moviepy import (
 )
 from PIL import Image
 
+from sfx import generate_sfx
+
 logger = logging.getLogger(__name__)
 
 # ── 경로 ─────────────────────────────────────────────────
@@ -36,6 +39,9 @@ W, H = 1080, 1920  # 9:16
 FPS = 30
 TRANSITION_DUR = 0.4
 SLIDE_PADDING = 0.5
+MEDIA_RATIO = 0.55  # GIF/이미지가 차지하는 상단 비율 (참고 영상 기준)
+MEDIA_H = int(H * MEDIA_RATIO)  # ~1056px
+BRAND_BLUE = (43, 91, 224)
 
 # ── temp 파일 추적 (MoviePy 렌더링 완료 후 정리) ────────
 _temp_files: list[str] = []
@@ -240,90 +246,108 @@ def _overlay_png_to_clip(png_bytes: bytes, duration: float) -> ImageClip:
 
 
 # ═════════════════════════════════════════════════════════
-# GIF/영상 → 배경 클립 변환
+# GIF/영상 → 상단 55% 씬 클립 (참고 영상 스타일)
 # ═════════════════════════════════════════════════════════
 
-def _media_to_bg_clip(media_bytes: bytes, media_info: dict, duration: float):
-    """미디어 → 1080×1920 배경 클립.
+def _fit_to_area(clip, target_w: int, target_h: int):
+    """클립을 target_w × target_h 영역에 맞게 리사이즈+크롭."""
+    cw, ch = clip.size
+    target_ratio = target_w / target_h
 
-    GIF(mp4) → 루핑 비디오
-    Video → 크롭 비디오
-    Image → Ken Burns 효과
-    """
-    media_type = media_info.get("type", "image")
-
-    if media_type == "gif":
-        return _gif_bytes_to_bg(media_bytes, media_info, duration)
-    elif media_type == "video":
-        return _video_bytes_to_bg(media_bytes, duration)
+    if cw / ch > target_ratio:
+        new_h = target_h
+        new_w = int(cw * (target_h / ch))
     else:
-        return _image_bytes_to_ken_burns(media_bytes, duration)
+        new_w = target_w
+        new_h = int(ch * (target_w / cw))
+
+    resized = clip.resized((new_w, new_h))
+    x_center = new_w / 2
+    y_center = new_h / 2
+    return resized.cropped(
+        x1=x_center - target_w / 2, y1=y_center - target_h / 2,
+        x2=x_center + target_w / 2, y2=y_center + target_h / 2,
+    )
 
 
-def _gif_bytes_to_bg(gif_bytes: bytes, media_info: dict, duration: float):
-    """GIF(mp4) → 루핑 배경 클립 (1080×1920).
+def _load_video_clip(media_bytes: bytes, media_info: dict, duration: float):
+    """미디어 bytes → 루핑 VideoFileClip (temp 파일 추적).
 
-    주의: temp 파일은 MoviePy 렌더링이 끝날 때까지 유지해야 함!
-    (VideoFileClip은 프레임을 lazy하게 읽으므로 파일 삭제 시 정적 이미지가 됨)
+    주의: temp 파일은 MoviePy 렌더링이 끝날 때까지 유지!
     """
-    is_mp4 = media_info.get("mp4_url", "").endswith(".mp4") or b"ftyp" in gif_bytes[:20]
+    is_mp4 = media_info.get("mp4_url", "").endswith(".mp4") or b"ftyp" in media_bytes[:20]
     suffix = ".mp4" if is_mp4 else ".gif"
 
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    tmp.write(gif_bytes)
+    tmp.write(media_bytes)
     tmp.close()
-    tmp_path = _track_temp(tmp.name)  # 렌더링 후 정리
+    _track_temp(tmp.name)
 
+    clip = VideoFileClip(tmp.name)
+    # 루핑
+    if clip.duration < duration:
+        n_loops = int(duration / clip.duration) + 1
+        clip = concatenate_videoclips([clip] * n_loops).subclipped(0, duration)
+    else:
+        clip = clip.subclipped(0, min(clip.duration, duration))
+    return clip
+
+
+def _media_to_scene_clip(media_bytes: bytes, media_info: dict,
+                          overlay_png: bytes | None, duration: float):
+    """미디어 + 오버레이 → 1분건강톡 스타일 씬 클립.
+
+    레이아웃 (참고 영상 기준):
+    ┌─────────────────┐
+    │ [🔴톡]   n/N    │  ← 오버레이 (로고, 번호)
+    │                 │
+    │  GIF/이미지     │  ← 상단 55% (MEDIA_H px)
+    │  (원본비율크롭)  │
+    │                 │
+    ├─ 그라데이션 ────┤
+    │  ■ 블루 ■■■■■  │  ← 하단 45% (브랜드 블루)
+    │  display_text   │  ← 오버레이 텍스트
+    │  @1분건강톡     │
+    └─────────────────┘
+    """
+    media_type = media_info.get("type", "image") if media_info else "none"
+
+    # 1. 브랜드 블루 배경 (전체)
+    bg_arr = np.full((H, W, 3), BRAND_BLUE, dtype=np.uint8)
+    bg_clip = ImageClip(bg_arr).with_duration(duration)
+
+    layers = [bg_clip]
+
+    # 2. 미디어 클립 → 상단 MEDIA_H 영역에 배치
+    media_clip = None
     try:
-        clip = VideoFileClip(tmp_path)
-        # 루핑
-        if clip.duration < duration:
-            n_loops = int(duration / clip.duration) + 1
-            looped = concatenate_videoclips([clip] * n_loops)
-            clip = looped.subclipped(0, duration)
-        else:
-            clip = clip.subclipped(0, min(clip.duration, duration))
-        # 9:16 크롭
-        clip = _fit_clip_to_reel(clip)
-        return clip
+        if media_type in ("gif", "video") and media_bytes:
+            raw_clip = _load_video_clip(media_bytes, media_info, duration)
+            media_clip = _fit_to_area(raw_clip, W, MEDIA_H)
+        elif media_type == "image" and media_bytes:
+            img = Image.open(io.BytesIO(media_bytes)).convert("RGB")
+            img = _fit_cover_pil(img, W, MEDIA_H)
+            media_clip = ImageClip(np.array(img)).with_duration(duration)
     except Exception as e:
-        logger.warning(f"GIF 클립 변환 실패: {e}")
-        return _solid_color_clip(duration)
+        logger.warning(f"미디어 클립 생성 실패: {e}")
+
+    if media_clip is not None:
+        layers.append(media_clip.with_position((0, 0)))
+
+    # 3. 텍스트 오버레이
+    if overlay_png:
+        overlay_clip = _overlay_png_to_clip(overlay_png, duration)
+        layers.append(overlay_clip)
+
+    scene = CompositeVideoClip(layers, size=(W, H)).with_duration(duration)
+    return scene
 
 
-def _video_bytes_to_bg(video_bytes: bytes, duration: float):
-    """영상 → 1080×1920 배경 클립."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-    tmp.write(video_bytes)
-    tmp.close()
-    tmp_path = _track_temp(tmp.name)  # 렌더링 후 정리
-
-    try:
-        clip = VideoFileClip(tmp_path)
-        if clip.duration > duration:
-            clip = clip.subclipped(0, duration)
-        elif clip.duration < duration:
-            n = int(duration / clip.duration) + 1
-            clip = concatenate_videoclips([clip] * n).subclipped(0, duration)
-        clip = _fit_clip_to_reel(clip)
-        return clip
-    except Exception as e:
-        logger.warning(f"영상 클립 변환 실패: {e}")
-        return _solid_color_clip(duration)
-
-
-def _image_bytes_to_ken_burns(img_bytes: bytes, duration: float):
-    """정적 이미지 → Ken Burns 효과 (줌인) 클립."""
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    zoom_factor = 1.15
-    big_w = int(W * zoom_factor)
-    big_h = int(H * zoom_factor)
-
-    # 크게 리사이즈
+def _fit_cover_pil(img: Image.Image, w: int, h: int) -> Image.Image:
+    """PIL 이미지를 w×h에 맞게 커버 크롭."""
     pw, ph = img.size
-    target_ratio = big_w / big_h
-    photo_ratio = pw / ph
-    if photo_ratio > target_ratio:
+    target_ratio = w / h
+    if pw / ph > target_ratio:
         new_w = int(ph * target_ratio)
         left = (pw - new_w) // 2
         img = img.crop((left, 0, left + new_w, ph))
@@ -331,29 +355,13 @@ def _image_bytes_to_ken_burns(img_bytes: bytes, duration: float):
         new_h = int(pw / target_ratio)
         top = (ph - new_h) // 2
         img = img.crop((0, top, pw, top + new_h))
-    img = img.resize((big_w, big_h), Image.LANCZOS)
-
-    arr = np.array(img)
-    base_clip = ImageClip(arr).with_duration(duration)
-
-    def make_frame(get_frame, t):
-        progress = t / max(duration, 0.01)
-        current_zoom = zoom_factor - (zoom_factor - 1.0) * progress
-        crop_w = int(W * current_zoom)
-        crop_h = int(H * current_zoom)
-        x = (big_w - crop_w) // 2
-        y = (big_h - crop_h) // 2
-        frame = get_frame(t)
-        cropped = frame[y:y + crop_h, x:x + crop_w]
-        pil = Image.fromarray(cropped).resize((W, H), Image.LANCZOS)
-        return np.array(pil)
-
-    return base_clip.transform(make_frame)
+    return img.resize((w, h), Image.LANCZOS)
 
 
-def _solid_color_clip(duration: float, color=(43, 91, 224)):
+def _solid_color_clip(duration: float, color=None):
     """단색 배경 클립 (폴백용)."""
-    arr = np.full((H, W, 3), color, dtype=np.uint8)
+    c = color or BRAND_BLUE
+    arr = np.full((H, W, 3), c, dtype=np.uint8)
     return ImageClip(arr).with_duration(duration)
 
 
@@ -382,21 +390,20 @@ def _swipe_transition(clip1, clip2, trans_dur: float = TRANSITION_DUR):
 # ═════════════════════════════════════════════════════════
 
 def compose_reel(
-    slide_bg_clips: list,
-    overlay_images: list[bytes | None],
+    scene_clips: list,
     narration_paths: list[str],
     output_path: str,
-    include_intro: bool = True,
+    include_intro: bool = False,
     include_bumper: bool = True,
     progress_callback=None,
 ) -> str:
     """릴스 영상 합성.
 
     Args:
-        slide_bg_clips: 배경 클립 리스트 (VideoClip/ImageClip)
-        overlay_images: 텍스트 오버레이 PNG bytes 리스트 (None이면 오버레이 없음)
+        scene_clips: 완성된 씬 클립 리스트 (GIF+블루바+텍스트 합성 완료)
         narration_paths: 나레이션 MP3 경로 리스트
         output_path: 출력 MP4 경로
+        include_intro: 인트로 포함 여부 (기본: False — 본론부터 시작)
     """
 
     def _progress(step, total, msg):
@@ -404,23 +411,21 @@ def compose_reel(
             progress_callback(step, total, msg)
         logger.info(f"[{step}/{total}] {msg}")
 
-    total_steps = len(slide_bg_clips) + 3
+    total_steps = len(scene_clips) + 3
     current_step = 0
 
     composed_slides = []
     slide_audios = []
     cumulative_time = 0.0
 
-    # INTRO
+    # INTRO (기본 비활성 — 본론부터 시작)
     if include_intro and os.path.exists(INTRO_PATH):
         current_step += 1
         _progress(current_step, total_steps, "인트로 영상 로드 중...")
         intro_clip = VideoFileClip(INTRO_PATH)
         iw, ih = intro_clip.size
         if iw > ih:
-            # 가로 영상 → 레터박스 (원본 애니메이션 보존)
             intro_clip = _letterbox_landscape(intro_clip)
-            logger.info(f"INTRO 레터박스 처리: {iw}×{ih} → {W}×{H}")
         elif (iw, ih) != (W, H):
             intro_clip = _fit_clip_to_reel(intro_clip)
         composed_slides.append(intro_clip)
@@ -428,33 +433,22 @@ def compose_reel(
     else:
         current_step += 1
 
-    # 슬라이드: 배경 + 오버레이 합성
-    for i, bg_clip in enumerate(slide_bg_clips):
+    # 씬 클립 배치 + 나레이션 동기화
+    for i, scene_clip in enumerate(scene_clips):
         current_step += 1
-        _progress(current_step, total_steps, f"슬라이드 {i + 1}/{len(slide_bg_clips)} 합성 중...")
+        _progress(current_step, total_steps, f"씬 {i + 1}/{len(scene_clips)} 배치 중...")
 
         narr_path = narration_paths[i] if i < len(narration_paths) else ""
         narr_dur = get_audio_duration(narr_path)
         slide_dur = narr_dur + SLIDE_PADDING
 
-        # 배경 duration 설정
-        if hasattr(bg_clip, 'duration') and bg_clip.duration and bg_clip.duration >= slide_dur:
-            bg_sized = bg_clip.subclipped(0, slide_dur)
+        # 씬 duration 조정
+        if hasattr(scene_clip, 'duration') and scene_clip.duration and scene_clip.duration >= slide_dur:
+            final_scene = scene_clip.subclipped(0, slide_dur)
         else:
-            bg_sized = bg_clip.with_duration(slide_dur)
+            final_scene = scene_clip.with_duration(slide_dur)
 
-        # 텍스트 오버레이 합성
-        overlay_data = overlay_images[i] if i < len(overlay_images) else None
-        if overlay_data:
-            overlay_clip = _overlay_png_to_clip(overlay_data, slide_dur)
-            final_slide = CompositeVideoClip(
-                [bg_sized, overlay_clip],
-                size=(W, H)
-            ).with_duration(slide_dur)
-        else:
-            final_slide = bg_sized
-
-        composed_slides.append(final_slide)
+        composed_slides.append(final_scene)
 
         if narr_path and os.path.exists(narr_path):
             audio = AudioFileClip(narr_path)
@@ -498,10 +492,36 @@ def compose_reel(
                     segments.append(remaining)
         final_video = concatenate_videoclips(segments, method="compose")
 
-    # 오디오 합성
+    # 오디오 합성 (나레이션 + SFX)
+    all_audio_parts = []
+
+    # 나레이션 오디오
     if slide_audios:
-        audio_clips = [audio.with_start(start) for audio, start in slide_audios]
-        combined_audio = CompositeAudioClip(audio_clips)
+        all_audio_parts.extend(
+            [audio.with_start(start) for audio, start in slide_audios]
+        )
+
+    # SFX: 전환 시점에 whoosh, 각 씬 시작에 pop
+    sfx_times = []
+    t = 0.0
+    for i, clip in enumerate(composed_slides):
+        if i > 0:
+            sfx_times.append(("whoosh", t - TRANSITION_DUR / 2))
+        sfx_times.append(("pop", t + 0.1))
+        t += clip.duration
+    for sfx_type, sfx_time in sfx_times:
+        sfx_path = generate_sfx(sfx_type)
+        if sfx_path and os.path.exists(sfx_path):
+            try:
+                sfx_clip = AudioFileClip(sfx_path)
+                sfx_clip = sfx_clip.with_start(max(0, sfx_time))
+                all_audio_parts.append(sfx_clip)
+                _track_temp(sfx_path)
+            except Exception as e:
+                logger.debug(f"SFX 로드 실패: {e}")
+
+    if all_audio_parts:
+        combined_audio = CompositeAudioClip(all_audio_parts)
         if final_video.audio is not None:
             combined_audio = CompositeAudioClip([final_video.audio, combined_audio])
         final_video = final_video.with_audio(combined_audio)
@@ -545,11 +565,11 @@ def create_reel(
     overlay_images: list[bytes],
     output_dir: str | None = None,
     voice: str = DEFAULT_VOICE,
-    include_intro: bool = True,
+    include_intro: bool = False,
     include_bumper: bool = True,
     progress_callback=None,
 ) -> dict:
-    """릴스 생성 통합 파이프라인 (GIF/영상 배경).
+    """릴스 생성 통합 파이프라인 (GIF 상단 55% + 블루바 하단 45%).
 
     Args:
         slides: 스크립트 슬라이드 리스트
@@ -557,6 +577,7 @@ def create_reel(
         overlay_images: 텍스트 오버레이 PNG bytes
         output_dir: 출력 디렉토리
         voice: TTS 음성 ID
+        include_intro: 인트로 포함 여부 (기본 False — 본론부터 시작)
     """
     if output_dir is None:
         output_dir = tempfile.mkdtemp(prefix="reel_")
@@ -569,32 +590,37 @@ def create_reel(
     os.makedirs(narr_dir, exist_ok=True)
     narration_paths = generate_narrations(slides, narr_dir, voice)
 
-    # Phase 2: 배경 클립 생성
+    # Phase 2: 씬 클립 생성 (GIF 상단 55% + 블루바 하단 45% + 오버레이)
     if progress_callback:
-        progress_callback(0.25, "배경 클립 준비 중...")
-    bg_clips = []
+        progress_callback(0.25, "씬 클립 생성 중...")
+    scene_clips = []
     for i, (m_bytes, m_info) in enumerate(media_data):
         narr_path = narration_paths[i] if i < len(narration_paths) else ""
         narr_dur = get_audio_duration(narr_path)
         slide_dur = narr_dur + SLIDE_PADDING
+        overlay = overlay_images[i] if i < len(overlay_images) else None
 
-        if m_bytes and m_info:
-            try:
-                clip = _media_to_bg_clip(m_bytes, m_info, slide_dur)
-                bg_clips.append(clip)
-                logger.info(f"배경 클립: slide_{i} ({m_info['type']}/{m_info.get('source', '?')})")
-                continue
-            except Exception as e:
-                logger.warning(f"배경 클립 실패 slide_{i}: {e}")
-        bg_clips.append(_solid_color_clip(slide_dur))
+        try:
+            scene = _media_to_scene_clip(m_bytes, m_info, overlay, slide_dur)
+            scene_clips.append(scene)
+            src = f"{m_info['type']}/{m_info.get('source', '?')}" if m_info else "브랜드 배경"
+            logger.info(f"씬 클립: slide_{i} ({src})")
+        except Exception as e:
+            logger.warning(f"씬 클립 실패 slide_{i}: {e}")
+            # 폴백: 오버레이만 있으면 블루 배경 + 오버레이
+            scene = _media_to_scene_clip(None, None, overlay, slide_dur)
+            scene_clips.append(scene)
+
+        if progress_callback:
+            progress_callback(0.25 + (i / len(media_data)) * 0.15,
+                              f"씬 {i + 1}/{len(media_data)} 생성 완료")
 
     # Phase 3: 영상 합성
     if progress_callback:
         progress_callback(0.40, "영상 합성 중...")
     video_path = os.path.join(output_dir, "reel.mp4")
     compose_reel(
-        slide_bg_clips=bg_clips,
-        overlay_images=overlay_images,
+        scene_clips=scene_clips,
         narration_paths=narration_paths,
         output_path=video_path,
         include_intro=include_intro,
@@ -636,7 +662,7 @@ def create_reel_legacy(
     frame_images: list[bytes],
     output_dir: str | None = None,
     voice: str = DEFAULT_VOICE,
-    include_intro: bool = True,
+    include_intro: bool = False,
     include_bumper: bool = True,
     progress_callback=None,
 ) -> dict:
@@ -654,17 +680,16 @@ def create_reel_legacy(
     if progress_callback:
         progress_callback(0.33, "영상 합성 중...")
 
-    bg_clips = []
+    scene_clips = []
     for i, img_bytes in enumerate(frame_images):
         narr_path = narration_paths[i] if i < len(narration_paths) else ""
         narr_dur = get_audio_duration(narr_path)
         slide_dur = narr_dur + SLIDE_PADDING
-        bg_clips.append(_image_bytes_to_clip(img_bytes, slide_dur))
+        scene_clips.append(_image_bytes_to_clip(img_bytes, slide_dur))
 
     video_path = os.path.join(output_dir, "reel.mp4")
     compose_reel(
-        slide_bg_clips=bg_clips,
-        overlay_images=[None] * len(frame_images),
+        scene_clips=scene_clips,
         narration_paths=narration_paths,
         output_path=video_path,
         include_intro=include_intro,

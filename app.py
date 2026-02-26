@@ -840,13 +840,10 @@ def render_reels_page():
     def _set_reels_topic(topic: str):
         st.session_state["rl_topic_input"] = topic
 
-    col_topic, col_slides = st.columns([4, 1])
-    with col_topic:
-        topic = st.text_input("릴스 주제", key="rl_topic_input",
-                              placeholder="예: 겨울철 일교차 건강관리, 수면 부족 해결법...")
-    with col_slides:
-        num_slides = st.slider("슬라이드 수", 5, 8, 6, help="hook 1 + content N + closing 1")
-        st.caption(f"hook 1 + content {num_slides - 2} + closing 1")
+    topic = st.text_input("릴스 주제", key="rl_topic_input",
+                          placeholder="예: 겨울철 일교차 건강관리, 수면 부족 해결법...")
+    st.caption("AI가 나레이션 분량에 맞게 씬 수를 자동 결정합니다 (30~60초)")
+    num_slides = None  # LLM이 동적으로 결정
 
     with st.expander("📌 추천 주제 (클릭하면 자동 입력)", expanded=False):
         suggestions = suggest_topics(include_news=True)
@@ -936,7 +933,7 @@ def render_reels_page():
         voice_name = st.selectbox("TTS 음성", list(VOICES.keys()), index=0)
         voice_id = VOICES[voice_name]
     with col_intro:
-        inc_intro = st.checkbox("인트로 포함", value=True, help="INTRO.mp4")
+        inc_intro = st.checkbox("인트로 포함", value=False, help="INTRO.mp4 (기본 비활성 — 본론부터 시작)")
     with col_bumper:
         inc_bumper = st.checkbox("범퍼 포함", value=True, help="BUMPER.mov")
 

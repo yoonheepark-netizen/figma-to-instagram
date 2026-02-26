@@ -108,10 +108,12 @@ media_query 예시:
 - "video": 영상 클립 배경 (운동 시연 등 실사 필요 시)
 - "image": 정적 이미지 (특별한 경우만)
 
-## 슬라이드 구성 ({num_slides}장)
-1. **hook** (1장): 첫 3초 시선 강탈! 유머+공감+숫자 조합. media_type="gif"
-2. **content** ({content_count}장): 문제→원인→해결, 각각 GIF/짤방과 어울리는 톤. media_type="gif" 또는 "video"
-3. **closing** (1장): "1분건강톡이었습니다" + CTA. media_type="image"
+## 슬라이드 구성 (동적 — 나레이션 분량에 맞게 자유롭게!)
+- **hook** (1장): 첫 3초 시선 강탈! 유머+공감+숫자 조합. media_type="gif"
+- **content** (자유): 나레이션 내용에 맞게 3~8장. 하나의 포인트당 1장. media_type="gif" 또는 "video"
+- **closing** (1장): "1분건강톡이었습니다" + CTA. media_type="image"
+- 총 30~60초 분량 (슬라이드당 4~8초 나레이션)
+- 핵심: 내용이 자연스럽게 끊기는 단위로 슬라이드를 나누세요!
 
 ## 출력 형식 (JSON만!)
 ```json
@@ -206,22 +208,25 @@ def _ensure_viral_patterns(script: dict) -> dict:
     return script
 
 
-def generate_reels_script(topic: str, num_slides: int = 6) -> dict | None:
+def generate_reels_script(topic: str, num_slides: int | None = None) -> dict | None:
     """릴스 스크립트 생성 (유머 + GIF 활용).
 
     Args:
         topic: 주제 (예: "겨울철 일교차 건강관리")
-        num_slides: 총 슬라이드 수 (5~8, hook+content+closing)
+        num_slides: 힌트용 (None이면 LLM이 나레이션 기반으로 동적 결정)
 
     Returns: 스크립트 dict or None
     """
-    content_count = num_slides - 2
-    system = _REELS_SYSTEM.format(num_slides=num_slides, content_count=content_count)
+    system = _REELS_SYSTEM
+
+    slide_hint = ""
+    if num_slides:
+        content_count = num_slides - 2
+        slide_hint = f"\n목표 슬라이드 수: 약 {num_slides}장 (hook 1 + content ~{content_count} + closing 1)"
 
     user = f"""다음 주제로 릴스 스크립트를 작성해주세요.
 
-주제: {topic}
-슬라이드 수: {num_slides}장 (hook 1장 + content {content_count}장 + closing 1장)
+주제: {topic}{slide_hint}
 
 ⚡ 핵심 지침:
 1. 웃겨야 합니다! 밈/짤방과 함께 봐야 재밌는 스타일
@@ -230,6 +235,9 @@ def generate_reels_script(topic: str, num_slides: int = 6) -> dict | None:
 4. 나레이션은 친구한테 카톡하듯 자연스럽게
 5. "와 이거 진짜?" + "ㅋㅋ 이거 나인데" = 공유 폭발
 6. description(캡션)은 200자 미만
+7. 슬라이드 수는 나레이션 내용에 맞게 자유롭게 결정
+8. ⚠️ 총 분량 30~50초! (hook 1 + content 3~5장 + closing 1 = 최대 7장)
+9. display_text에 이모지 넣지 마세요 (폰트 미지원). 텍스트만!
 
 반드시 JSON만 출력하세요."""
 

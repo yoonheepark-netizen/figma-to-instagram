@@ -129,6 +129,18 @@ def _draw_gradient(draw: ImageDraw.ImageDraw, y_start: int, y_end: int,
         draw.line([(0, y_start + i), (W - 1, y_start + i)], fill=(r, g, b, a))
 
 
+def _strip_emoji(text: str) -> str:
+    """텍스트에서 이모지 제거 (폰트 미지원 → 두부 문자 방지)."""
+    import re
+    return re.sub(r'[\U0001F600-\U0001F9FF\U00002702-\U000027B0'
+                  r'\U0001F1E0-\U0001F1FF\U00002600-\U000026FF'
+                  r'\U0000FE00-\U0000FE0F\U0001FA00-\U0001FAFF'
+                  r'\U00002B50-\U00002B55\U0001F300-\U0001F5FF'
+                  r'\U0001F680-\U0001F6FF\U0000231A-\U0000231B'
+                  r'\U000023E9-\U000023F3\U000025AA-\U000025FE'
+                  r'\U00002702-\U00002764\U0000203C-\U00003299]+', '', text).strip()
+
+
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
     lines = []
     for raw_line in text.split("\n"):
@@ -173,54 +185,65 @@ class ReelsRenderer:
                             slide_num: int | None = None, total: int | None = None) -> bytes:
         """GIF/영상 위에 합성할 투명 배경 텍스트 오버레이 PNG.
 
-        하단에 반투명 브랜드 블루 박스 + 큰 흰색 텍스트.
-        상단에 로고 배지 + 슬라이드 번호.
+        참고 영상 기준 레이아웃:
+        - 상단 55%: 투명 (GIF/이미지 영역 — 로고 배지만)
+        - 하단 45%: 불투명 브랜드 블루 + 큰 흰색 텍스트
         """
+        # 이모지 제거 (폰트 미지원 → 두부 문자 방지)
+        display_text = _strip_emoji(display_text)
         canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
 
+        # 상단 55% = 미디어 영역 (투명, 로고+번호만)
+        media_h = int(H * 0.55)  # ~1056px
+        # 하단 45% = 불투명 블루 텍스트 영역
+        box_h = H - media_h  # ~864px
+        box_y = media_h
+
         if slide_type == "hook":
-            # Hook: 전체 어두운 오버레이 + 중앙 큰 텍스트
-            dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 100))
-            canvas = Image.alpha_composite(canvas, dark_overlay)
+            # Hook: 상단에 얇은 어두운 오버레이 + 하단 블루 박스
+            dark_overlay = Image.new("RGBA", (W, media_h), (0, 0, 0, 60))
+            canvas.paste(dark_overlay, (0, 0), dark_overlay)
+
+            # 미디어 → 블루 전환 그라데이션 (경계 자연스럽게)
+            grad_overlay = Image.new("RGBA", (W, 100), (0, 0, 0, 0))
+            _draw_gradient(ImageDraw.Draw(grad_overlay),
+                           0, 100,
+                           BRAND["blue"], BRAND["blue"],
+                           alpha_top=0, alpha_bot=255)
+            canvas.paste(grad_overlay, (0, box_y - 100), grad_overlay)
+
+            # 불투명 블루 박스
+            blue_box = Image.new("RGBA", (W, box_h), (*BRAND["blue"], 255))
+            canvas.paste(blue_box, (0, box_y), blue_box)
             draw = ImageDraw.Draw(canvas)
 
-            # 중앙 텍스트 박스
-            font = _load_font("bold", 78)
-            lines = _wrap_text(display_text, font, W - 140)
-            line_h = 100
-            total_h = len(lines) * line_h + 60  # 패딩 포함
-            box_y = (H - total_h) // 2 - 30
-            # 반투명 블루 박스
-            box = Image.new("RGBA", (W - 60, total_h), (*BRAND["blue"], 200))
-            canvas.paste(box, (30, box_y), box)
-            draw = ImageDraw.Draw(canvas)
-
-            y = box_y + 30
+            # 텍스트 (블루 영역 내)
+            font = _load_font("bold", 72)
+            lines = _wrap_text(display_text, font, W - 120)
+            line_h = 92
+            text_total = len(lines) * line_h
+            y = box_y + (box_h - text_total) // 2 - 30
             for line in lines:
                 bbox = font.getbbox(line)
                 tw = bbox[2] - bbox[0]
                 x = (W - tw) // 2
-                # 그림자
-                draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 180))
+                draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 100))
                 draw.text((x, y), line, font=font, fill=BRAND["white"])
                 y += line_h
 
         else:
-            # Content: 하단 35% 반투명 블루 박스
-            box_h = int(H * 0.35)
-            box_y = H - box_h
-
-            # 그라데이션 오버레이 (블루 → 투명)
-            grad_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            # Content: 하단 45% 불투명 블루 박스
+            # 미디어 → 블루 전환 그라데이션
+            grad_overlay = Image.new("RGBA", (W, 100), (0, 0, 0, 0))
             _draw_gradient(ImageDraw.Draw(grad_overlay),
-                           box_y - 120, box_y,
+                           0, 100,
                            BRAND["blue"], BRAND["blue"],
-                           alpha_top=0, alpha_bot=210)
-            canvas = Image.alpha_composite(canvas, grad_overlay)
+                           alpha_top=0, alpha_bot=255)
+            canvas.paste(grad_overlay, (0, box_y - 100), grad_overlay)
 
-            # 블루 박스
-            blue_box = Image.new("RGBA", (W, box_h), (*BRAND["blue"], 210))
+            # 불투명 블루 박스
+            blue_box = Image.new("RGBA", (W, box_h), (*BRAND["blue"], 255))
             canvas.paste(blue_box, (0, box_y), blue_box)
             draw = ImageDraw.Draw(canvas)
 
@@ -229,23 +252,22 @@ class ReelsRenderer:
             lines = _wrap_text(display_text, font, W - 120)
             line_h = 82
             text_total = len(lines) * line_h
-            y = box_y + (box_h - text_total) // 2 - 20
+            y = box_y + (box_h - text_total) // 2 - 30
             for line in lines:
                 bbox = font.getbbox(line)
                 tw = bbox[2] - bbox[0]
                 x = (W - tw) // 2
-                draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 120))
+                draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 100))
                 draw.text((x, y), line, font=font, fill=BRAND["white"])
                 y += line_h
 
-        # 로고 배지
+        # 로고 배지 (상단 좌측)
         self._draw_badge(canvas, draw)
 
-        # 슬라이드 번호
+        # 슬라이드 번호 (상단 우측)
         if slide_num and total:
             num_font = _load_font("bold", 38)
             num_text = f"{slide_num}/{total}"
-            # 반투명 배경 원
             pill_w = 90
             pill_h = 48
             pill_x = W - pill_w - 30
@@ -258,7 +280,7 @@ class ReelsRenderer:
             draw.text((pill_x + (pill_w - tw) // 2, pill_y + 4),
                        num_text, font=num_font, fill=BRAND["white"])
 
-        # 하단 계정명
+        # 하단 계정명 (블루 영역 맨 아래)
         self._draw_account(draw)
 
         return self._export_rgba(canvas)

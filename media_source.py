@@ -227,31 +227,46 @@ def search_unsplash_portrait(query: str, limit: int = 4) -> list[dict]:
 def search_media(query: str, preferred_type: MediaType = "gif") -> dict | None:
     """미디어 통합 검색. 소싱 우선순위에 따라 폴백.
 
+    GIF → Tenor → GIPHY → (Pexels Video) → Unsplash 이미지
+    Video → Pexels → Unsplash 이미지
+    Image → Unsplash
+
     Returns: 미디어 메타데이터 dict 또는 None
     """
-    if preferred_type == "gif":
+    if preferred_type in ("gif", "video"):
         # 1) Tenor GIF
-        results = search_tenor(query, limit=5)
-        if results:
-            return results[0]
-        # 2) GIPHY GIF
-        results = search_giphy(query, limit=5)
-        if results:
-            return results[0]
+        if preferred_type == "gif":
+            results = search_tenor(query, limit=5)
+            if results:
+                logger.info(f"Tenor 검색 성공: '{query}' → {len(results)}건")
+                return results[0]
+            # 2) GIPHY GIF
+            results = search_giphy(query, limit=5)
+            if results:
+                logger.info(f"GIPHY 검색 성공: '{query}' → {len(results)}건")
+                return results[0]
 
-    if preferred_type == "video":
-        # 3) Pexels Video
+        # 3) Pexels Video (gif도 video도 여기로 폴백)
         results = search_pexels_video(query, limit=3)
         if results:
+            logger.info(f"Pexels 검색 성공: '{query}' → {len(results)}건")
             return results[0]
 
     # 4) Unsplash 이미지 폴백
-    # GIF/영상 검색어를 이미지용으로 변환 (반응 키워드 제거)
     img_query = _clean_query_for_image(query)
     results = search_unsplash_portrait(img_query, limit=3)
     if results:
+        logger.info(f"Unsplash 폴백 성공: '{img_query}' → {len(results)}건")
         return results[0]
 
+    # 5) 마지막 시도: 원본 쿼리로 Unsplash 재검색
+    if img_query != query:
+        results = search_unsplash_portrait(query, limit=3)
+        if results:
+            logger.info(f"Unsplash 원본쿼리 성공: '{query}'")
+            return results[0]
+
+    logger.warning(f"모든 미디어 소스 실패: '{query}'")
     return None
 
 

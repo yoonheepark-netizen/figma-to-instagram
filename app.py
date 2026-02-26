@@ -951,7 +951,17 @@ def render_reels_page():
         try:
             # Phase 1: GIF/영상 미디어 검색 + 다운로드
             _progress(0.0, "GIF/영상 미디어 검색 중...")
+
+            # API 상태 사전 확인
+            sources = get_available_sources()
+            active = [k for k, v in sources.items() if v]
+            if not active:
+                st.warning("⚠️ 미디어 API 키가 설정되지 않았습니다. 설정 탭에서 API 키를 추가하세요.")
+            else:
+                st.caption(f"활성 미디어 소스: {', '.join(active)}")
+
             media_data = []  # [(bytes, metadata), ...]
+            found_count = 0
             for i, slide in enumerate(slides):
                 query = slide.get("media_query", "") or slide.get("image_prompt", "")
                 media_type = slide.get("media_type", "gif")
@@ -962,12 +972,17 @@ def render_reels_page():
                     m_bytes, m_info = search_and_download(query, preferred_type=media_type)
                     if m_bytes and m_info:
                         media_data.append((m_bytes, m_info))
+                        found_count += 1
                         _progress(0.02 + (i / len(slides)) * 0.13,
-                                  f"미디어 {i + 1}/{len(slides)}: {m_info['type']}/{m_info.get('source', '?')}")
+                                  f"미디어 {i + 1}/{len(slides)}: {m_info['type']}/{m_info.get('source', '?')} "
+                                  f"({len(m_bytes) // 1024}KB)")
                     else:
                         media_data.append((None, None))
                         _progress(0.02 + (i / len(slides)) * 0.13,
-                                  f"미디어 {i + 1}/{len(slides)}: 폴백 (단색 배경)")
+                                  f"미디어 {i + 1}/{len(slides)}: '{query}' → 결과 없음")
+
+            if found_count == 0:
+                st.warning("⚠️ 미디어를 하나도 찾지 못했습니다. API 키를 확인하세요.")
 
             st.session_state.rl_media = media_data
 

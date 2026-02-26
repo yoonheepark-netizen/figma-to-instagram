@@ -19,6 +19,7 @@ from moviepy import (
     AudioFileClip,
     CompositeVideoClip,
     ImageClip,
+    VideoClip,
     VideoFileClip,
     concatenate_videoclips,
     CompositeAudioClip,
@@ -291,54 +292,85 @@ def _load_video_clip(media_bytes: bytes, media_info: dict, duration: float):
     return clip
 
 
-def _media_to_scene_clip(media_bytes: bytes, media_info: dict,
+def _media_to_scene_clip(media_bytes: bytes | None, media_info: dict | None,
                           overlay_png: bytes | None, duration: float):
-    """미디어 + 오버레이 → 1분건강톡 스타일 씬 클립.
+    """미디어 + 오버레이 → 씬 클립 (PIL 기반 합성 — 신뢰성 보장).
 
-    레이아웃 (참고 영상 기준):
+    MoviePy의 CompositeVideoClip + 마스크 알파 합성 대신,
+    PIL.Image.alpha_composite()로 매 프레임을 직접 합성.
+    GIF/영상이 확실히 보이도록 보장.
+
+    레이아웃:
     ┌─────────────────┐
-    │ [🔴톡]   n/N    │  ← 오버레이 (로고, 번호)
+    │ [🔴톡]   n/N    │  ← 오버레이 (투명 배경, 로고·번호)
     │                 │
     │  GIF/이미지     │  ← 상단 55% (MEDIA_H px)
     │  (원본비율크롭)  │
     │                 │
     ├─ 그라데이션 ────┤
-    │  ■ 블루 ■■■■■  │  ← 하단 45% (브랜드 블루)
+    │  ■ 블루 ■■■■■  │  ← 하단 45% (불투명 블루)
     │  display_text   │  ← 오버레이 텍스트
     │  @1분건강톡     │
     └─────────────────┘
     """
     media_type = media_info.get("type", "image") if media_info else "none"
 
-    # 1. 브랜드 블루 배경 (전체)
-    bg_arr = np.full((H, W, 3), BRAND_BLUE, dtype=np.uint8)
-    bg_clip = ImageClip(bg_arr).with_duration(duration)
-
-    layers = [bg_clip]
-
-    # 2. 미디어 클립 → 상단 MEDIA_H 영역에 배치
-    media_clip = None
-    try:
-        if media_type in ("gif", "video") and media_bytes:
-            raw_clip = _load_video_clip(media_bytes, media_info, duration)
-            media_clip = _fit_to_area(raw_clip, W, MEDIA_H)
-        elif media_type == "image" and media_bytes:
-            img = Image.open(io.BytesIO(media_bytes)).convert("RGB")
-            img = _fit_cover_pil(img, W, MEDIA_H)
-            media_clip = ImageClip(np.array(img)).with_duration(duration)
-    except Exception as e:
-        logger.warning(f"미디어 클립 생성 실패: {e}")
-
-    if media_clip is not None:
-        layers.append(media_clip.with_position((0, 0)))
-
-    # 3. 텍스트 오버레이
+    # ── 오버레이 RGBA 이미지 준비 (1회) ──
+    overlay_pil = None
     if overlay_png:
-        overlay_clip = _overlay_png_to_clip(overlay_png, duration)
-        layers.append(overlay_clip)
+        try:
+            overlay_pil = Image.open(io.BytesIO(overlay_png)).convert("RGBA")
+        except Exception as e:
+            logger.warning(f"오버레이 로드 실패: {e}")
 
-    scene = CompositeVideoClip(layers, size=(W, H)).with_duration(duration)
-    return scene
+    def _composite_frame(base_rgb: Image.Image) -> np.ndarray:
+        """RGB 배경 위에 RGBA 오버레이를 알파 합성 → RGB numpy."""
+        if overlay_pil:
+            base_rgba = base_rgb.convert("RGBA")
+            composited = Image.alpha_composite(base_rgba, overlay_pil)
+            return np.array(composited.convert("RGB"))
+        return np.array(base_rgb)
+
+    # ── Case 1: GIF/Video → per-frame PIL 합성 ──
+    if media_type in ("gif", "video") and media_bytes:
+        try:
+            raw_clip = _load_video_clip(media_bytes, media_info, duration)
+            fitted_clip = _fit_to_area(raw_clip, W, MEDIA_H)
+            logger.info(f"미디어 클립 로드 성공: {media_type}/{media_info.get('source', '?')} "
+                        f"({fitted_clip.size[0]}x{fitted_clip.size[1]}, {fitted_clip.duration:.1f}s)")
+
+            def make_frame(t):
+                canvas = Image.new("RGB", (W, H), BRAND_BLUE)
+                try:
+                    frame_arr = fitted_clip.get_frame(t)
+                    frame_img = Image.fromarray(frame_arr)
+                    canvas.paste(frame_img, (0, 0))
+                except Exception as e:
+                    logger.debug(f"프레임 {t:.2f}s 로드 실패: {e}")
+                return _composite_frame(canvas)
+
+            scene = VideoClip(make_frame, duration=duration)
+            scene = scene.with_fps(FPS)
+            return scene
+        except Exception as e:
+            logger.warning(f"GIF/Video 씬 생성 실패 ({media_type}): {e}")
+
+    # ── Case 2: Image → PIL 합성 후 ImageClip ──
+    if media_type == "image" and media_bytes:
+        try:
+            canvas = Image.new("RGB", (W, H), BRAND_BLUE)
+            img = Image.open(io.BytesIO(media_bytes)).convert("RGB")
+            fitted = _fit_cover_pil(img, W, MEDIA_H)
+            canvas.paste(fitted, (0, 0))
+            logger.info(f"이미지 클립 생성: {media_info.get('source', '?')}")
+            return ImageClip(_composite_frame(canvas)).with_duration(duration)
+        except Exception as e:
+            logger.warning(f"이미지 씬 생성 실패: {e}")
+
+    # ── Case 3: 미디어 없음 → 블루 배경 + 오버레이 ──
+    logger.info("미디어 없음 → 브랜드 블루 배경")
+    canvas = Image.new("RGB", (W, H), BRAND_BLUE)
+    return ImageClip(_composite_frame(canvas)).with_duration(duration)
 
 
 def _fit_cover_pil(img: Image.Image, w: int, h: int) -> Image.Image:
@@ -397,16 +429,20 @@ def _render_one_scene(scene_clip, narr_path: str, output_file: str,
     narr_dur = get_audio_duration(narr_path)
     slide_dur = narr_dur + SLIDE_PADDING
 
-    # duration 조정
-    if hasattr(scene_clip, 'duration') and scene_clip.duration and scene_clip.duration >= slide_dur:
-        clip = scene_clip.subclipped(0, slide_dur)
-    else:
-        clip = scene_clip.with_duration(slide_dur)
+    # duration 조정 — VideoClip(make_frame)은 subclipped 대신 with_duration 사용
+    clip = scene_clip.with_duration(slide_dur)
+
+    # fps 보장 (VideoClip에서 fps가 없을 수 있음)
+    if not hasattr(clip, 'fps') or clip.fps is None:
+        clip = clip.with_fps(FPS)
 
     # 페이드 인/아웃 (부드러운 전환 효과)
     if slide_dur > fade_dur * 2:
-        from moviepy.video.fx import FadeIn, FadeOut
-        clip = clip.with_effects([FadeIn(fade_dur), FadeOut(fade_dur)])
+        try:
+            from moviepy.video.fx import FadeIn, FadeOut
+            clip = clip.with_effects([FadeIn(fade_dur), FadeOut(fade_dur)])
+        except Exception as e:
+            logger.debug(f"페이드 효과 실패: {e}")
 
     # 나레이션 오디오 합성
     if narr_path and os.path.exists(narr_path):
@@ -428,6 +464,7 @@ def _render_one_scene(scene_clip, narr_path: str, output_file: str,
         pass
 
     # 개별 MP4로 저장
+    logger.info(f"씬 렌더링: {output_file} (dur={slide_dur:.1f}s, fps={clip.fps})")
     clip.write_videofile(
         output_file, fps=FPS, codec="libx264", audio_codec="aac",
         threads=2, preset="fast", logger=None,
@@ -598,26 +635,35 @@ def create_reel(
     if progress_callback:
         progress_callback(0.25, "씬 클립 생성 중...")
     scene_clips = []
+    media_stats = {"gif": 0, "video": 0, "image": 0, "none": 0}
     for i, (m_bytes, m_info) in enumerate(media_data):
         narr_path = narration_paths[i] if i < len(narration_paths) else ""
         narr_dur = get_audio_duration(narr_path)
         slide_dur = narr_dur + SLIDE_PADDING
         overlay = overlay_images[i] if i < len(overlay_images) else None
 
+        # 미디어 진단 로그
+        if m_bytes and m_info:
+            src = f"{m_info['type']}/{m_info.get('source', '?')}"
+            media_stats[m_info.get("type", "none")] = media_stats.get(m_info.get("type", "none"), 0) + 1
+            logger.info(f"씬 {i}: 미디어 {src} ({len(m_bytes)} bytes)")
+        else:
+            media_stats["none"] += 1
+            logger.info(f"씬 {i}: 미디어 없음 → 브랜드 배경")
+
         try:
             scene = _media_to_scene_clip(m_bytes, m_info, overlay, slide_dur)
             scene_clips.append(scene)
-            src = f"{m_info['type']}/{m_info.get('source', '?')}" if m_info else "브랜드 배경"
-            logger.info(f"씬 클립: slide_{i} ({src})")
         except Exception as e:
             logger.warning(f"씬 클립 실패 slide_{i}: {e}")
-            # 폴백: 오버레이만 있으면 블루 배경 + 오버레이
             scene = _media_to_scene_clip(None, None, overlay, slide_dur)
             scene_clips.append(scene)
 
         if progress_callback:
             progress_callback(0.25 + (i / len(media_data)) * 0.15,
                               f"씬 {i + 1}/{len(media_data)} 생성 완료")
+
+    logger.info(f"미디어 통계: {media_stats}")
 
     # Phase 3: 영상 합성
     if progress_callback:

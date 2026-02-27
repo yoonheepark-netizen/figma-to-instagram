@@ -2425,15 +2425,27 @@ with st.sidebar:
 
     st.divider()
 
+    def _secret(key, default=""):
+        """os.getenv → st.secrets["api"] 폴백"""
+        val = os.getenv(key, "")
+        if val:
+            return val
+        try:
+            if "api" in st.secrets and key in st.secrets["api"]:
+                return str(st.secrets["api"][key])
+        except Exception:
+            pass
+        return default
+
     figma_file_key = st.text_input(
         "Figma 파일 키",
-        value=os.getenv("FIGMA_FILE_KEY", ""),
+        value=_secret("FIGMA_FILE_KEY"),
         help="Figma URL에서 /file/ 뒤의 문자열",
     )
 
     pencil_gist_id = st.text_input(
         "Pencil Gist ID",
-        value=os.getenv("PENCIL_GIST_ID", "8fe8dc21eb2e4c8a9dc2b8c48a559c36"),
+        value=_secret("PENCIL_GIST_ID", "8fe8dc21eb2e4c8a9dc2b8c48a559c36"),
         help="cardupload 스크립트가 생성한 GitHub Gist ID",
     )
 
@@ -2642,32 +2654,37 @@ figma_selected = {}  # Figma 탭에서 선택된 항목
 with tab_figma:
     col_load, col_info = st.columns([1, 3])
     with col_load:
-        if st.button("불러오기", use_container_width=True, key="load_figma"):
-            if not figma_file_key:
-                st.error("Figma 파일 키를 입력해주세요.")
-            else:
-                try:
-                    with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
-                        figma = FigmaClient()
-                        all_frames = figma.get_file_frames(figma_file_key)
-                        ig_frames = [
-                            f for f in all_frames if "인스타그램" in f.get("page", "")
-                        ]
-                        if not ig_frames:
-                            ig_frames = all_frames
-                        st.session_state.frames = ig_frames
-                        groups, ungrouped = group_frames_by_date(ig_frames)
-                        st.session_state.frame_groups = groups
-                        st.session_state.ungrouped = ungrouped
-                except Exception as e:
-                    st.error(f"Figma 불러오기 실패: {e}")
-
+        _figma_clicked = st.button("불러오기", use_container_width=True, key="load_figma")
     with col_info:
         if st.session_state.frames:
             st.caption(
                 f"총 {len(st.session_state.frames)}개 프레임, "
                 f"{len(st.session_state.frame_groups or {})}개 이미지셋"
             )
+    if _figma_clicked:
+        from config import Config as _Cfg
+        _figma_token = _Cfg.FIGMA_TOKEN or os.getenv("FIGMA_TOKEN", "")
+        if not figma_file_key:
+            st.error("사이드바에서 Figma 파일 키를 입력해주세요.")
+        elif not _figma_token:
+            st.error("FIGMA_TOKEN이 설정되지 않았습니다. secrets 또는 .env를 확인해주세요.")
+        else:
+            try:
+                with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
+                    figma = FigmaClient()
+                    all_frames = figma.get_file_frames(figma_file_key)
+                    ig_frames = [
+                        f for f in all_frames if "인스타그램" in f.get("page", "")
+                    ]
+                    if not ig_frames:
+                        ig_frames = all_frames
+                    st.session_state.frames = ig_frames
+                    groups, ungrouped = group_frames_by_date(ig_frames)
+                    st.session_state.frame_groups = groups
+                    st.session_state.ungrouped = ungrouped
+                    st.success(f"✅ {len(ig_frames)}개 프레임 로드 완료")
+            except Exception as e:
+                st.error(f"Figma 불러오기 실패: {e}")
 
     if st.session_state.frame_groups:
         groups = st.session_state.frame_groups
@@ -2703,27 +2720,28 @@ with tab_figma:
 with tab_pencil:
     col_load, col_info = st.columns([1, 3])
     with col_load:
-        if st.button("불러오기", use_container_width=True, key="load_pencil"):
-            gist_id = pencil_gist_id.strip().rstrip("/") if pencil_gist_id.strip() else ""
-            # "owner/gist_id" 형식이 아니면 마지막 segment만 추출
-            if "/" not in gist_id:
-                gist_id = gist_id.split("/")[-1]
-            if not gist_id:
-                st.error("사이드바에서 Pencil Gist ID를 먼저 설정해주세요.")
-            else:
-                with st.spinner("Pencil.dev에서 콘텐츠를 가져오는 중..."):
-                    try:
-                        pencil = PencilClient()
-                        series_list = pencil.get_series(gist_id)
-                        st.session_state.pencil_manifest = series_list
-                    except Exception as e:
-                        st.error(f"불러오기 실패: {e}")
-
+        _pencil_clicked = st.button("불러오기", use_container_width=True, key="load_pencil")
     with col_info:
         if st.session_state.pencil_manifest:
             st.caption(
                 f"총 {len(st.session_state.pencil_manifest)}개 이미지셋"
             )
+    if _pencil_clicked:
+        gist_id = pencil_gist_id.strip().rstrip("/") if pencil_gist_id.strip() else ""
+        # "owner/gist_id" 형식이 아니면 마지막 segment만 추출
+        if "/" not in gist_id:
+            gist_id = gist_id.split("/")[-1]
+        if not gist_id:
+            st.error("사이드바에서 Pencil Gist ID를 먼저 설정해주세요.")
+        else:
+            try:
+                with st.spinner("Pencil.dev에서 콘텐츠를 가져오는 중..."):
+                    pencil = PencilClient()
+                    series_list = pencil.get_series(gist_id)
+                    st.session_state.pencil_manifest = series_list
+                    st.success(f"✅ {len(series_list)}개 이미지셋 로드 완료")
+            except Exception as e:
+                st.error(f"Pencil 불러오기 실패: {e}")
 
     if st.session_state.pencil_manifest:
         series_list = st.session_state.pencil_manifest

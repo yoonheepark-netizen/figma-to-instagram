@@ -757,7 +757,7 @@ def render_cardnews_page():
                         st.caption(f"글자수: {len(desc)} / 2,200자")
 
                 # 복사용 JSON
-                col_dl, col_save = st.columns(2)
+                col_dl, col_save, col_archive = st.columns(3)
                 with col_dl:
                     export = {
                         "idea": {
@@ -791,6 +791,40 @@ def render_cardnews_page():
                         }
                         save_history(save_entry)
                         st.success(f"#{rank} 아이디어가 히스토리에 저장되었습니다.")
+                with col_archive:
+                    gen_key = f"cn_generated_cards_{rank}"
+                    has_cards = gen_key in st.session_state and st.session_state[gen_key]
+                    if st.button(
+                        "📤 발행용 아카이빙",
+                        key=f"cn_archive_{rank}",
+                        disabled=not has_cards,
+                        use_container_width=True,
+                    ):
+                        generated = st.session_state[gen_key]
+                        display_order = ["cover"] + [f"content{i}" for i in range(1, 20) if f"content{i}" in generated] + ["closing"]
+                        files = []
+                        for idx, key in enumerate(display_order):
+                            if key in generated:
+                                files.append({"name": f"{idx+1:02d}_{key}.png", "bytes": generated[key]})
+                        title = idea.get("title", "untitled")[:20]
+                        archive_name = f"{datetime.now().strftime('%m%d')}_{rank}위_{title}"
+                        entry = {
+                            "name": archive_name,
+                            "files": files,
+                            "caption": desc,
+                        }
+                        if "cn_archive" not in st.session_state:
+                            st.session_state.cn_archive = []
+                        # 중복 방지
+                        existing_names = [a["name"] for a in st.session_state.cn_archive]
+                        if archive_name in existing_names:
+                            idx = existing_names.index(archive_name)
+                            st.session_state.cn_archive[idx] = entry
+                        else:
+                            st.session_state.cn_archive.append(entry)
+                        st.success(f"'{archive_name}' → 게시물 발행에 아카이빙 완료!")
+                    if not has_cards:
+                        st.caption("이미지 생성 후 사용 가능")
 
 
 def render_insights_page(account):
@@ -2597,7 +2631,9 @@ if "pencil_series" not in st.session_state:
     st.session_state.pencil_series = {}
 if "pencil_manifest" not in st.session_state:
     st.session_state.pencil_manifest = None
-tab_figma, tab_pencil, tab_upload, tab_url = st.tabs(["Figma", "Pencil.dev", "이미지 업로드", "URL 입력"])
+if "cn_archive" not in st.session_state:
+    st.session_state.cn_archive = []
+tab_figma, tab_pencil, tab_upload, tab_url, tab_cardnews = st.tabs(["Figma", "Pencil.dev", "이미지 업로드", "URL 입력", "📋 카드뉴스"])
 
 figma_selected = {}  # Figma 탭에서 선택된 항목
 
@@ -2831,6 +2867,33 @@ with tab_url:
                     del st.session_state.url_series[sname]
                     st.rerun()
 
+# ── Tab 5: 카드뉴스 ──
+cardnews_selected = {}
+with tab_cardnews:
+    archive = st.session_state.cn_archive
+    if not archive:
+        st.info("카드뉴스 생성 페이지에서 '발행용 아카이빙' 버튼을 눌러 카드뉴스를 추가하세요.")
+    else:
+        for idx, entry in enumerate(archive):
+            with st.expander(f"{entry['name']} ({len(entry['files'])}장)", expanded=True):
+                # 이미지 미리보기
+                preview_cols = st.columns(min(len(entry["files"]), 5))
+                for i, f in enumerate(entry["files"]):
+                    with preview_cols[i % 5]:
+                        st.image(f["bytes"], caption=f["name"], use_container_width=True)
+                # 캡션 미리보기
+                if entry.get("caption"):
+                    st.caption(f"캡션: {entry['caption'][:100]}...")
+                # 선택 / 삭제
+                col_sel, col_del = st.columns([3, 1])
+                with col_sel:
+                    if st.checkbox("발행 목록에 추가", key=f"cn_sel_{idx}", value=True):
+                        cardnews_selected[entry["name"]] = entry
+                with col_del:
+                    if st.button("삭제", key=f"cn_del_{idx}"):
+                        st.session_state.cn_archive.pop(idx)
+                        st.rerun()
+
 # ── 전체 소스 통합 ──
 all_selected = {}
 
@@ -2849,6 +2912,10 @@ for sname, surls in st.session_state.pencil_series.items():
 # URL 항목
 for sname, surls in st.session_state.url_series.items():
     all_selected[sname] = {"source": "url", "urls": surls, "count": len(surls)}
+
+# 카드뉴스 항목
+for sname, entry in cardnews_selected.items():
+    all_selected[sname] = {"source": "upload", "files": entry["files"], "count": len(entry["files"]), "_caption": entry.get("caption", "")}
 
 if all_selected:
     st.session_state.all_selected = all_selected
@@ -3005,11 +3072,16 @@ if st.session_state.get("all_selected"):
                     except Exception as e:
                         st.error(f"캡션 생성 실패: {e}")
 
+            # 카드뉴스 캡션 자동 입력
+            caption_key = f"caption_{grp}"
+            if grp_info.get("_caption") and caption_key not in st.session_state:
+                st.session_state[caption_key] = grp_info["_caption"]
+
             caption = st.text_area(
                 "캡션",
                 placeholder="게시물 캡션을 입력하세요 (해시태그 포함 가능)",
                 height=120,
-                key=f"caption_{grp}",
+                key=caption_key,
             )
 
             mode = st.radio(

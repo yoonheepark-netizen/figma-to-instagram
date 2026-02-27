@@ -242,7 +242,7 @@ def upload_bytes_to_imgbb(file_bytes, filename, expiration=86400):
     result = resp.json()
     if not result.get("success"):
         raise RuntimeError(f"imgbb 업로드 실패: {result}")
-    return result["data"]["url"]
+    return result["data"]["image"]["url"]
 
 
 def publish_one_group(group_name, group_info, caption, scheduled_time, account, status_container):

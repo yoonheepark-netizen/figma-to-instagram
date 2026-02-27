@@ -33,7 +33,8 @@ class ImageHost:
         if not result.get("success"):
             raise RuntimeError(f"imgbb 업로드 실패: {result}")
 
-        public_url = result["data"]["url"]
+        data = result["data"]
+        public_url = data.get("display_url") or data.get("image", {}).get("url") or data["url"]
         logger.info(f"  업로드 완료: {image_path} → {public_url}")
         return public_url
 

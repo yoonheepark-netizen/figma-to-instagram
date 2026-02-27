@@ -2643,18 +2643,24 @@ with tab_figma:
     col_load, col_info = st.columns([1, 3])
     with col_load:
         if st.button("불러오기", use_container_width=True, key="load_figma"):
-            with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
-                figma = FigmaClient()
-                all_frames = figma.get_file_frames(figma_file_key)
-                ig_frames = [
-                    f for f in all_frames if "인스타그램" in f.get("page", "")
-                ]
-                if not ig_frames:
-                    ig_frames = all_frames
-                st.session_state.frames = ig_frames
-                groups, ungrouped = group_frames_by_date(ig_frames)
-                st.session_state.frame_groups = groups
-                st.session_state.ungrouped = ungrouped
+            if not figma_file_key:
+                st.error("Figma 파일 키를 입력해주세요.")
+            else:
+                try:
+                    with st.spinner("Figma에서 콘텐츠를 가져오는 중..."):
+                        figma = FigmaClient()
+                        all_frames = figma.get_file_frames(figma_file_key)
+                        ig_frames = [
+                            f for f in all_frames if "인스타그램" in f.get("page", "")
+                        ]
+                        if not ig_frames:
+                            ig_frames = all_frames
+                        st.session_state.frames = ig_frames
+                        groups, ungrouped = group_frames_by_date(ig_frames)
+                        st.session_state.frame_groups = groups
+                        st.session_state.ungrouped = ungrouped
+                except Exception as e:
+                    st.error(f"Figma 불러오기 실패: {e}")
 
     with col_info:
         if st.session_state.frames:

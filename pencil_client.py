@@ -1,7 +1,21 @@
 import logging
+import os
 import requests
 
 logger = logging.getLogger(__name__)
+
+def _github_token():
+    """GITHUB_TOKEN을 환경변수 또는 st.secrets에서 가져옵니다."""
+    val = os.getenv("GITHUB_TOKEN", "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        if "api" in st.secrets and "GITHUB_TOKEN" in st.secrets["api"]:
+            return str(st.secrets["api"]["GITHUB_TOKEN"])
+    except Exception:
+        pass
+    return ""
 
 # 모듈 레벨 캐시: {gist_id: manifest_dict}
 _manifest_cache = {}
@@ -89,19 +103,22 @@ class PencilClient:
             if not owner:
                 try:
                     api_url = f"https://api.github.com/gists/{gist_id}"
-                    api_resp = requests.get(api_url, timeout=10)
+                    headers = {}
+                    token = _github_token()
+                    if token:
+                        headers["Authorization"] = f"token {token}"
+                    api_resp = requests.get(api_url, headers=headers, timeout=10)
                     api_resp.raise_for_status()
                     owner = api_resp.json().get("owner", {}).get("login", "")
                     _owner_cache[gist_id] = owner
                 except requests.exceptions.HTTPError as e:
-                    if e.response is not None and e.response.status_code == 403:
-                        raise RuntimeError(
-                            "GitHub API rate limit 초과입니다. "
-                            "Gist ID를 'owner/gist_id' 형식으로 입력하면 "
-                            "API 호출 없이 직접 접근할 수 있습니다. "
-                            f"(예: 'yoonheepark-netizen/{gist_id}')"
-                        ) from e
-                    raise
+                    if e.response is not None and e.response.status_code in (403, 401):
+                        # rate limit 또는 인증 실패 → 기본 owner로 폴백
+                        logger.warning("GitHub API 실패, 기본 owner로 폴백")
+                        owner = "yoonheepark-netizen"
+                        _owner_cache[gist_id] = owner
+                    else:
+                        raise
             url = f"{self.GIST_RAW_BASE}/{owner}/{gist_id}/raw/{self.MANIFEST_FILE}"
 
         logger.info(f"  Gist 매니페스트 로드: {gist_id}")

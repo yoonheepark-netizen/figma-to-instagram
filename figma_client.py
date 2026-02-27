@@ -15,11 +15,11 @@ class FigmaClient:
         self.base_url = Config.FIGMA_BASE_URL
 
     def get_file_frames(self, file_key=None):
-        """Figma 파일의 모든 최상위 프레임 목록을 반환합니다."""
+        """Figma 파일의 모든 프레임 목록을 반환합니다 (SECTION 내부 포함)."""
         file_key = file_key or Config.FIGMA_FILE_KEY
         url = f"{self.base_url}/files/{file_key}"
         resp = requests.get(
-            url, headers=self.headers, params={"depth": 2}, timeout=30
+            url, headers=self.headers, params={"depth": 3}, timeout=60
         )
         resp.raise_for_status()
 
@@ -34,6 +34,17 @@ class FigmaClient:
                             "page": page["name"],
                         }
                     )
+                elif child["type"] == "SECTION":
+                    for sub in child.get("children", []):
+                        if sub["type"] == "FRAME":
+                            frames.append(
+                                {
+                                    "id": sub["id"],
+                                    "name": sub["name"],
+                                    "page": page["name"],
+                                    "section": child["name"],
+                                }
+                            )
         return frames
 
     def export_images(self, node_ids=None, fmt="png", scale=2, batch_size=10):

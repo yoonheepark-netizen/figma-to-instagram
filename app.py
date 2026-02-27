@@ -2716,6 +2716,21 @@ with tab_figma:
                     if len(selected_frames) >= 1:
                         figma_selected[grp] = [f["id"] for f in selected_frames]
 
+    # 그룹에 속하지 않는 개별 프레임
+    if st.session_state.get("ungrouped"):
+        ungrouped = st.session_state.ungrouped
+        with st.expander(f"개별 프레임 ({len(ungrouped)}개)", expanded=not st.session_state.frame_groups):
+            ug_sel = []
+            for i, frame in enumerate(ungrouped):
+                if i % 5 == 0:
+                    _ug_cols = st.columns(5)
+                with _ug_cols[i % 5]:
+                    if st.checkbox(frame["name"], key=f"ug_{frame['id']}"):
+                        ug_sel.append(frame)
+            if ug_sel:
+                st.caption(f"{len(ug_sel)}장 선택됨")
+                figma_selected["개별선택"] = [f["id"] for f in ug_sel]
+
 # ── Tab 2: Pencil.dev ──
 with tab_pencil:
     col_load, col_info = st.columns([1, 3])

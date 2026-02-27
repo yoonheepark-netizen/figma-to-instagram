@@ -2049,7 +2049,7 @@ def _build_script_system(num_content: int = 5) -> str:
         beat = _STORY_BEATS[i] if i < len(_STORY_BEATS) else f"내용{i+1}"
         structure_lines.append(f"#{i+2}. 내용{i+1}: {beat}")
     structure_lines.append(
-        f"#{total}. 클로징: product가 있으면 '더 오래, 더 건강하게. 한의사가 만드는 한의 브랜드', product가 '없음'이면 주제에 맞는 여운형 마무리"
+        f"#{total}. 클로징: 더 오래, 더 건강하게. 한의사가 만드는 한의 브랜드 (고정)"
     )
     structure_block = "\n".join(structure_lines)
 
